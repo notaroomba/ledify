@@ -11818,6 +11818,17 @@
 				)
 			)
 		)
+		(property "LCSC" "C2441427"
+			(at 262.89 81.28 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "5"
 			(uuid "94c44ae9-3cd9-4bd2-90ce-4126b66848c7")
 		)
@@ -13945,6 +13956,17 @@
 			)
 		)
 		(property "Description" "Resistor"
+			(at 358.14 194.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C25855"
 			(at 358.14 194.31 0)
 			(hide yes)
 			(show_name no)
@@ -16317,6 +16339,17 @@
 				)
 			)
 		)
+		(property "LCSC" "C76971"
+			(at 115.57 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "1562dbac-78d4-4585-a4d9-2f946e06b0de")
 		)
@@ -16466,6 +16499,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 311.15 83.82 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C541337"
 			(at 311.15 83.82 0)
 			(hide yes)
 			(show_name no)
@@ -16734,7 +16778,7 @@
 		(dnp no)
 		(uuid "6c3f0623-acd4-4737-9ea9-d92b5bb27476")
 		(property "Reference" "C13"
-			(at 336.804 178.054 0)
+			(at 336.804 177.546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -16744,8 +16788,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22uF"
-			(at 336.804 180.086 0)
+		(property "Value" "22uF\n25V"
+			(at 336.804 180.34 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -16778,6 +16822,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 334.01 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C309062"
 			(at 334.01 179.07 0)
 			(hide yes)
 			(show_name no)
@@ -17011,6 +17066,17 @@
 			)
 		)
 		(property "Description" "2A, 1.1MHz Buck DC/DC Converter, fixed 3.3V output voltage, TSOT-23-6"
+			(at 212.09 265.43 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C780769"
 			(at 212.09 265.43 0)
 			(hide yes)
 			(show_name no)
@@ -19844,6 +19910,17 @@
 				)
 			)
 		)
+		(property "LCSC" "C2894897"
+			(at 45.72 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "B6"
 			(uuid "0e864293-2b98-4b52-8f29-1ba4cf92bee3")
 		)
@@ -20088,7 +20165,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "4.7uF\n50V"
+		(property "Value" "4.7uF\n25V"
 			(at 73.914 35.306 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20122,6 +20199,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 71.12 33.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C69335"
 			(at 71.12 33.02 0)
 			(hide yes)
 			(show_name no)
@@ -20407,6 +20495,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 326.39 83.82 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C1855288"
 			(at 326.39 83.82 0)
 			(hide yes)
 			(show_name no)
@@ -20797,7 +20896,7 @@
 		(dnp no)
 		(uuid "c23ccfb5-0469-4afb-91bd-17749c83a477")
 		(property "Reference" "C11"
-			(at 315.214 178.054 0)
+			(at 315.214 177.546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -20807,8 +20906,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22uF"
-			(at 315.214 180.086 0)
+		(property "Value" "22uF\n25V"
+			(at 315.214 180.34 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -20841,6 +20940,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 312.42 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C309062"
 			(at 312.42 179.07 0)
 			(hide yes)
 			(show_name no)
@@ -21703,6 +21813,17 @@
 				)
 			)
 		)
+		(property "LCSC" "C76971"
+			(at 110.49 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "7519ef54-bedb-40c4-818d-01e10d87811a")
 		)
@@ -22206,7 +22327,7 @@
 		(dnp no)
 		(uuid "e2fa1521-e595-4eab-b9b2-a89abb0c02a0")
 		(property "Reference" "C12"
-			(at 326.644 178.054 0)
+			(at 326.644 177.546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22216,8 +22337,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22uF"
-			(at 326.644 180.086 0)
+		(property "Value" "22uF\n25V"
+			(at 326.644 180.34 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22250,6 +22371,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 323.85 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C309062"
 			(at 323.85 179.07 0)
 			(hide yes)
 			(show_name no)
@@ -22710,7 +22842,7 @@
 		(dnp no)
 		(uuid "ec0e48e1-1152-410d-9390-8cfe75fe634e")
 		(property "Reference" "C10"
-			(at 305.054 178.054 0)
+			(at 305.054 177.546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22720,8 +22852,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22uF"
-			(at 305.054 180.086 0)
+		(property "Value" "22uF\n25V"
+			(at 305.054 180.34 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22754,6 +22886,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 302.26 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C309062"
 			(at 302.26 179.07 0)
 			(hide yes)
 			(show_name no)
@@ -22868,7 +23011,7 @@
 		(dnp no)
 		(uuid "ef16a14e-c3f5-40cc-8d87-635e01e97d9d")
 		(property "Reference" "C14"
-			(at 346.964 178.054 0)
+			(at 346.964 177.546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22878,8 +23021,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22uF"
-			(at 346.964 180.086 0)
+		(property "Value" "22uF\n25V"
+			(at 346.964 180.34 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22912,6 +23055,17 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 344.17 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C309062"
 			(at 344.17 179.07 0)
 			(hide yes)
 			(show_name no)
