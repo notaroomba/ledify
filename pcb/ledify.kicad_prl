@@ -1,6 +1,6 @@
 {
   "board": {
-    "active_layer": 0,
+    "active_layer": 5,
     "active_layer_preset": "",
     "auto_track_width": true,
     "hidden_netclasses": [],
@@ -52,11 +52,9 @@
       "conflict_shadows",
       "shapes",
       "board_outline_area",
-      "ly_points",
-      "grid_items",
-      "via_stitching"
+      "ly_points"
     ],
-    "visible_layers": "ffffffff_ffffffff_ffffffff_ffffffff",
+    "visible_layers": "ffffffff_ffffffff_fffffff5_ffffffff",
     "zone_display_mode": 0
   },
   "git": {
@@ -67,11 +65,10 @@
   },
   "meta": {
     "filename": "ledify.kicad_prl",
-    "version": 7
+    "version": 5
   },
   "net_inspector_panel": {
     "col_hidden": [
-      false,
       false,
       false,
       false,
@@ -97,21 +94,19 @@
       8,
       9,
       10,
-      11,
-      12
+      11
     ],
     "col_widths": [
       156,
-      103,
       141,
       103,
-      114,
       71,
       103,
       103,
       103,
-      111,
       74,
+      103,
+      103,
       103,
       0
     ],
