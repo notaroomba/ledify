@@ -147,9 +147,9 @@
           "hatch_thickness": 1.0,
           "min_clearance": 0.15,
           "min_island_area": 10.0,
-          "min_thickness": 0.15,
+          "min_thickness": 0.2,
           "pad_connection": 2,
-          "remove_islands": 1,
+          "remove_islands": 2,
           "thermal_relief_gap": 0.5,
           "thermal_relief_spoke_width": 0.5
         }
@@ -248,17 +248,17 @@
         "min_copper_edge_clearance": 0.2,
         "min_groove_width": 0.0,
         "min_hole_clearance": 0.2,
-        "min_hole_to_hole": 0.25,
+        "min_hole_to_hole": 0.2,
         "min_microvia_diameter": 0.2,
         "min_microvia_drill": 0.1,
         "min_resolved_spokes": 2,
         "min_silk_clearance": 0.0,
         "min_text_height": 0.8,
         "min_text_thickness": 0.08,
-        "min_through_hole_diameter": 0.3,
+        "min_through_hole_diameter": 0.2,
         "min_track_width": 0.0,
         "min_via_annular_width": 0.1,
-        "min_via_diameter": 0.5,
+        "min_via_diameter": 0.4,
         "solder_mask_to_copper_clearance": 0.005,
         "use_height_for_length_calcs": true
       },
@@ -821,7 +821,7 @@
         "uuid": "7359eb1e-4294-4575-8a2e-b56d7630d872"
       }
     ],
-    "used_designators": "AE1,H1,R1-9,X1-2,L1-5,SW1-2,C1-42,U1-9,OSC1,Q1,D1,#PWR1-75,J1-4",
+    "used_designators": "AE1,H1,R1-11,X1-2,L1-5,SW1-2,C1-42,U1-9,OSC1,Q1,D1,#PWR1-78,J1-4",
     "variants": []
   },
   "sheets": [
