@@ -1570,12 +1570,6 @@
 		(path "/61132004-a381-4735-82c3-da4a2e1ffb7d")
 		(sheetname "/")
 		(sheetfile "ledify.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "4" "9" "1" "14" "12" "13" "8" "5" "2" "3" "10" "11" "7" "6")
-			)
-		)
 		(attr through_hole)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
@@ -1693,16 +1687,6 @@
 		)
 		(fp_line
 			(start 1.5 -1.25)
-			(end 1.5 -1.25)
-			(stroke
-				(width 0.05)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "115ad0e9-cff2-4f34-8e48-ba48eaccf2eb")
-		)
-		(fp_line
-			(start 1.5 -1.25)
 			(end -1.5 -1.25)
 			(stroke
 				(width 0.05)
@@ -1710,16 +1694,6 @@
 			)
 			(layer "F.CrtYd")
 			(uuid "77aea366-f767-4274-a06e-2ba7c1fac7c3")
-		)
-		(fp_line
-			(start -1.5 -1.25)
-			(end -1.5 -1.25)
-			(stroke
-				(width 0.05)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "fb0a24ad-e9f4-4823-a55e-066951c5951f")
 		)
 		(fp_line
 			(start -1.5 -1.25)
@@ -1740,16 +1714,6 @@
 			)
 			(layer "F.CrtYd")
 			(uuid "3c607ac3-a5c5-4922-b758-93ee5ef27461")
-		)
-		(fp_line
-			(start 1.5 1.25)
-			(end 1.5 1.25)
-			(stroke
-				(width 0.05)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "34073f85-1f9c-4297-a1b5-1aa4f644bfea")
 		)
 		(fp_line
 			(start -1.5 1.25)
@@ -29488,6 +29452,30 @@
 		(uuid "e0f5c557-634e-4555-ad31-18c5f35a9381")
 	)
 	(segment
+		(start 82.4 55.4)
+		(end 82.01 55.79)
+		(width 0.2)
+		(layer "F.Cu")
+		(net "Net-(U1-GPIO8)")
+		(uuid "1080009c-d766-4b93-9d60-53185637a293")
+	)
+	(segment
+		(start 82.4 54.81)
+		(end 82.4 55.4)
+		(width 0.2)
+		(layer "F.Cu")
+		(net "Net-(U1-GPIO8)")
+		(uuid "66e9f0c5-21c6-430f-b68d-a96d43eacaa3")
+	)
+	(segment
+		(start 82.01 55.79)
+		(end 82.01 56.3)
+		(width 0.2)
+		(layer "F.Cu")
+		(net "Net-(U1-GPIO8)")
+		(uuid "70017e2d-f638-4235-9f84-a087806e2007")
+	)
+	(segment
 		(start 82.9625 78.35)
 		(end 82.9625 77.8375)
 		(width 0.2)
@@ -29950,30 +29938,6 @@
 		(layer "F.Cu")
 		(net "Net-(J2-D+-PadA6)")
 		(uuid "e5e0d6f8-101d-416c-bc96-2495fecca44d")
-	)
-	(segment
-		(start 82.4 55.4)
-		(end 82.01 55.79)
-		(width 0.2)
-		(layer "F.Cu")
-		(net "Net-(U1-GPIO8)")
-		(uuid "1080009c-d766-4b93-9d60-53185637a293")
-	)
-	(segment
-		(start 82.4 54.81)
-		(end 82.4 55.4)
-		(width 0.2)
-		(layer "F.Cu")
-		(net "Net-(U1-GPIO8)")
-		(uuid "66e9f0c5-21c6-430f-b68d-a96d43eacaa3")
-	)
-	(segment
-		(start 82.01 55.79)
-		(end 82.01 56.3)
-		(width 0.2)
-		(layer "F.Cu")
-		(net "Net-(U1-GPIO8)")
-		(uuid "70017e2d-f638-4235-9f84-a087806e2007")
 	)
 	(zone
 		(net "Net-(U6-SW)")
