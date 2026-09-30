@@ -14,7 +14,7 @@ except ImportError:
 NUM_LEDS = 30  # length of your strip
 MAX_LEVEL = 128  # brightness cap (0-255), lower it if the supply browns out
 
-PIN_LED_DATA = 15  # LED_CON, the SIG pad
+PIN_LED_DATA = 5  # LED_CON, the SIG pad
 PIN_LED_ENABLE = 3  # LED_ENABLE, high = LED buck on
 PIN_LED_12V = 2  # LED_SW_V, low = 5 V, high = 12 V
 

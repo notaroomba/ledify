@@ -33,6 +33,8 @@ A super small addressable LED controller with USB-C PD up to 100W, a switchable 
 - **Switchable 5V/12V LED output** from a 10A buck converter (LM61495), selected in software
 - **Addressable LED pads** (VCC / SIG / GND) for WS2812B, WS2811 and WS2815 strips
 - **IMU and Barometer** - BMI323 (6-axis) and BMP581 pressure sensor
+- **Ambient light sensor** (OPT4001) for automatic brightness
+- **I2S microphone** (ICS-43434) for sound-reactive effects
 - **PCB trace antenna** with an impedance matching network
 - **3.3V buck converter** (AP63203) for the logic side
 - **ESD protection** on the USB data lines
@@ -59,15 +61,18 @@ Designed in KiCad with attention to RF design and high current power delivery. T
 | ---- | ---------- | ----------------------------------------- |
 | 2    | LED_SW_V   | LED voltage select (low = 5V, high = 12V) |
 | 3    | LED_ENABLE | LED buck enable                           |
-| 15   | LED_CON    | LED data (SIG pad)                        |
-| 10   | USB_PD_SDA | FUSB302B I2C data                         |
-| 11   | USB_PD_SCL | FUSB302B I2C clock                        |
+| 5    | LED_CON    | LED data (SIG pad)                        |
+| 6    | MIC_OUT    | Microphone I2S data                       |
+| 22   | MIC_CS     | Microphone I2S word select                |
+| 23   | MIC_SCK    | Microphone I2S bit clock                  |
+| 10   | I2C_SDA    | I2C data (FUSB302B, OPT4001)              |
+| 11   | I2C_SCL    | I2C clock (FUSB302B, OPT4001)             |
 | 16   | USB_PD_INT | FUSB302B interrupt                        |
 | 18   | SPI_MISO   | Sensor SPI                                |
 | 19   | SPI_MOSI   | Sensor SPI                                |
 | 20   | SPI_SCK    | Sensor SPI                                |
 | 21   | CS_IMU     | BMI323 chip select                        |
-| 22   | CS_BARO    | BMP581 chip select                        |
+| 7    | CS_BARO    | BMP581 chip select                        |
 | 12   | DN         | USB D-                                    |
 | 13   | DP         | USB D+                                    |
 | 9    | CHIP_BOOT  | Boot button                               |

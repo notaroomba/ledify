@@ -129,3 +129,33 @@ after that I went through all of the LCSC part numbers and some of them didn't m
 and now the drc has no more errors and the bom matches the schematic so its finally ready to order
 
 **Total time spent: 5 hours**
+
+# Sep 29, 2026
+
+so the board was "done" but I kept thinking of stuff to add lol
+
+first I wanted an ambient light sensor so the leds can dim themselves when the room is dark. I went with the OPT4001 and it's i2c so I just put it on the same bus as the FUSB302 and didn't have to use any more pins. the only space left was next to the 3V3 buck so I put it on the output side away from the inductor. when I added it I accidentally ran some tracks straight through a group of 3V3 vias and shorted CHIP_EN and MISO to 3V3 so I had to fix that
+
+then I looked at the return paths around the esp32 because I thought it was interesting and it turns out I had signal tracks on the inner layers cutting slots in the ground plane right under the chip, and there was only ONE ground via under the esp. so I moved CS_BARO and LED_CON off the planes, changed a few pins around (led data is on GPIO5 now and CS_BARO on GPIO7) and added more ground vias under it
+
+after that I wanted a microphone so the leds can react to sound. I started with an analog one (ZTS6117) but the output is only a few millivolts so the esp adc can't really read it without an op amp and like 10 more parts. so I looked at the MAX9814 and then decided on an i2s mic instead because its one part and the signal is digital so the bucks can't mess with it
+
+I also tied SYNC/MODE on the big buck to 3V3 so it always switches at the same frequency and doesn't make the caps hum next to the mic
+
+**Total time spent: 4 hours**
+
+# Sep 30, 2026
+
+the i2s mic I picked (MSM261S4030H0R) was out of stock on LCSC so I spent a while looking for another one. apparently top port i2s mics basically don't exist, almost all of them have the hole on the bottom, so I went with the ICS-43434 which is a bit smaller and listens through a hole in the pcb
+
+the footprint had the sound hole as a plated hole with no copper around it which jlc can't make so I changed it to a 0.5mm non plated hole
+
+I also double checked the antenna again. the feed trace is the 50 ohm width for the JLC04161H-3313 stackup and nothing is inside the keepout on any layer so I just have to remember to pick that stackup when I order
+
+then I fixed a 0.1mm track I missed, exported the production files again and redid the renders with the new parts
+
+![](assets/flyer.png)
+
+with the extra sensors the pcba is around 300 usd now for 2 assembled boards, I looked at how much it would be to assemble them myself and its way cheaper per board but the esp32 is 0.4mm pitch and there are 3 LGA sensors so I'm going with pcba for this one
+
+**Total time spent: 2.5 hours**
