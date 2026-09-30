@@ -139,7 +139,7 @@ first I wanted an ambient light sensor so the leds can dim themselves when the r
 then I looked at the return paths around the esp32 because I thought it was interesting and it turns out I had signal tracks on the inner layers cutting slots in the ground plane right under the chip, and there was only ONE ground via under the esp. so I moved CS_BARO and LED_CON off the planes, changed a few pins around (led data is on GPIO5 now and CS_BARO on GPIO7) and added more ground vias under it
 
 after that I wanted a microphone so the leds can react to sound. I started with an analog one (ZTS6117) but the output is only a few millivolts so the esp adc can't really read it without an op amp and like 10 more parts. so I looked at the MAX9814 and then decided on an i2s mic instead because its one part and the signal is digital so the bucks can't mess with it
-
+![](assets/zms.png)
 I also tied SYNC/MODE on the big buck to 3V3 so it always switches at the same frequency and doesn't make the caps hum next to the mic
 
 **Total time spent: 4 hours**
