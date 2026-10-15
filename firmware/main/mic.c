@@ -52,13 +52,13 @@ static void block(void)
     rms = (uint32_t)sqrtf((float)(acc / N)) >> 8;
     uint32_t x = (uint32_t)rms * gain;
     if (x < floor_) {
-        floor_ = x;
+        floor_ -= (floor_ - x) >> 4;                           // the floor is a smoothed lower envelope of x:
     } else {
-        floor_ += (x - floor_) >> 9;                           // about 4 s to follow a louder room
+        floor_ += (x - floor_) >> 9;                           // drops in ~0.1 s, climbs over ~4 s
     }
-    uint32_t sig = x > floor_ * 3 / 2 ? x - floor_ * 3 / 2 : 0;   // only what sticks out 3.5 dB above the floor is sound
+    uint32_t sig = x > floor_ * 2 ? x - floor_ * 2 : 0;           // only what sticks out 6 dB above the floor is sound
     peak = sig > peak ? sig : peak - (peak >> PEAK_DECAY);
-    uint32_t ref = peak > floor_ + 64 ? peak : floor_ + 64;      // normalise to the recent peak, never to nothing
+    uint32_t ref = peak > floor_ * 2 + 64 ? peak : floor_ * 2 + 64;   // normalise to the recent peak, never to the noise itself
     uint32_t l = sig * 255 / ref;
     if (l > 255) {
         l = 255;
