@@ -31,6 +31,7 @@ typedef enum { COLOR_SOLID, COLOR_RAINBOW, COLOR_TEMP, COLOR_SPECTRUM, COLOR_MET
 // overwrites the other. pos = % along the strip per stop, NULL spreads them evenly.
 void leds_set_palette(int slot, const uint8_t (*stops)[3], const uint8_t *pos, int n);
 void leds_palette_str(int slot, char *out, size_t n);   // the stops as "rrggbb@pct,..."
+void leds_set_stripe(uint8_t px);               // 0 = blend the stops; N = stripes, each distinct stop colour in runs of N pixels
 void leds_set_droop(uint8_t pct);               // tail colour fix 0..100: cut red along the strip against voltage sag, 0 = off
 // lvl: brightness after every modifier. lit: pixels on from the start of the strip (count for all of them).
 // bands: bass/mid/treble 0..255 for the spectrum bars.

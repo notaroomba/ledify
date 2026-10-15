@@ -12,7 +12,7 @@ const [spState, setSpState] = createSignal('not connected');
 const [track, setTrack] = createSignal('—'), [artist, setArtist] = createSignal(''), [art, setArt] = createSignal('');
 const [palette, setPalette] = createSignal([]), [connected, setConnected] = createSignal(!!tok());
 const clientId = () => client() || SPOTIFY_CLIENT_ID;
-let last = '';
+let last = '', armed = false;      // armed: the switch was just turned on, so the next cover also selects the effect
 
 async function login() {
   const id = clientId();
@@ -54,12 +54,17 @@ async function poll() {
     setArtist((it.artists || []).map(a => a.name).join(', ') + (it.album ? ' · ' + it.album.name : ''));
     const cover = it.album && it.album.images && it.album.images.length ? it.album.images[Math.min(1, it.album.images.length - 1)].url : '';
     if (cover) setArt(cover);
-    if (it.id !== last) { last = it.id; if (cover && auto()) gradientFromArt(cover); }
+    if (it.id !== last) {
+      const changed = last !== '';                               // on the first poll after a load only the cover slot is refreshed
+      last = it.id;
+      if (cover && auto()) gradientFromArt(cover, armed || (changed && opt.mode() === 'cover'));
+      armed = false;
+    }
   } catch (e) { setSpState('Spotify: ' + e.message); }
 }
 // Up to five prominent colours of the cover: skip near-black, near-white and grey pixels, bucket the rest, rank by
 // size and saturation, keep ones that differ clearly, order by hue, push each to full intensity, send as a gradient.
-function gradientFromArt(url) {
+function gradientFromArt(url, show) {
   const img = new Image(); img.crossOrigin = 'anonymous';
   img.onload = () => {
     const c = document.createElement('canvas'); c.width = c.height = 40;
@@ -80,8 +85,8 @@ function gradientFromArt(url) {
     picked.sort((a, b) => hue(a) - hue(b));
     const hexes = picked.map(col => { const mx = Math.max(col.r, col.g, col.b); return [col.r, col.g, col.b].map(v => hex2(v * 255 / mx)).join(''); });
     setPalette(hexes);
-    opt.setMode('palette');
-    send('palette ' + hexes.join(','));
+    send('cover ' + hexes.join(','));                               // its own slot: the user's gradient is untouched
+    if (show) { opt.setMode('cover'); send('mode cover'); }
   };
   img.onerror = () => toast('Could not load the cover', 'warn');
   img.src = url;
@@ -97,6 +102,6 @@ async function init() {
 }
 export const sp = {
   client, setClient: v => { v = v.trim(); setClientSig(v); localStorage.setItem('ledify.sp.client', v); },
-  auto, setAuto: on => { setAutoSig(on); localStorage.setItem('ledify.sp.auto', on ? '1' : '0'); if (on) last = ''; },
+  auto, setAuto: on => { setAutoSig(on); localStorage.setItem('ledify.sp.auto', on ? '1' : '0'); if (on) { last = ''; armed = true; } },
   state: spState, track, artist, art, palette, connected, toggle, init,
 };

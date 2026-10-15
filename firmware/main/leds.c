@@ -35,6 +35,7 @@ static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour s
 static uint8_t pal[2][LED_MAX_STOPS][3] = {{{255, 255, 255}}, {{255, 255, 255}}};   // gradient stops per slot (user, cover), in strip order
 static uint8_t pal_pos[2][LED_MAX_STOPS];                 // and their position in %
 static int npal[2] = {1, 1};
+static uint8_t stripe;                                    // stripes of this many pixels per stop colour, 0 = blend
 static uint8_t droop;                                     // tail colour fix in %, see leds_frame()
 static uint16_t fade_ms = FADE_MS;
 static uint8_t shown[MAX_LEDS][3];                        // what is on the strip now (before brightness), eased towards fb
@@ -239,6 +240,17 @@ static void render(leds_color_t c, int i, int n, uint8_t r, uint8_t g, uint8_t b
     case COLOR_PALETTE:
     case COLOR_COVER: {                                         // blend between the two stops around this pixel, 8.8 fixed point
         int sl = c == COLOR_COVER, np = npal[sl];
+        if (stripe) {                                           // stripes: the distinct stop colours in turn, stripe pixels each
+            int idx[LED_MAX_STOPS], nd = 0;
+            for (int k = 0; k < np; k++) {
+                if (!k || memcmp(pal[sl][k], pal[sl][k - 1], 3)) {
+                    idx[nd++] = k;
+                }
+            }
+            const uint8_t *q = pal[sl][idx[(i / stripe) % nd]];
+            p[0] = q[0]; p[1] = q[1]; p[2] = q[2];
+            break;
+        }
         uint32_t x = n > 1 ? (uint32_t)i * 100 * 256 / (n - 1) : 0;   // position along the run in %, 8.8
         int k = 0;
         while (k < np - 2 && x >= (uint32_t)pal_pos[sl][k + 1] << 8) {
@@ -395,6 +407,11 @@ void leds_set_palette(int sl, const uint8_t (*stops)[3], const uint8_t *pos, int
             }
         }
     }
+}
+
+void leds_set_stripe(uint8_t px)
+{
+    stripe = px;
 }
 
 void leds_palette_str(int sl, char *out, size_t n)

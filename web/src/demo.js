@@ -5,7 +5,7 @@ import { ingest, hooks, setUi } from './store';
 const st = {
   fw: 'demo', power: 1, volt: 5, mode: 'solid', color: 'solid', bright: 'level', overlay: 'none', auto: 0, level: 160, count: 300,
   type: 'ws2812', cap: 160, gain: 25, lux_lo: 0, lux_hi: 500, night: 0, temp_lo: 15, temp_hi: 30, limit: 0, pdmax: 20000,
-  pddelay: 100, droop: 0, tmax: 70, fade: 300, pd: { attached: 1, ready: 1, mv: 20000, ma: 3000 }, net: 'demo board, nothing is wired',
+  pddelay: 100, droop: 0, tmax: 70, fade: 300, stripe: 0, cover: 'ffffff@0', pd: { attached: 1, ready: 1, mv: 20000, ma: 3000 }, net: 'demo board, nothing is wired',
   pdos: [[5000, 3000], [9000, 3000], [15000, 3000], [20000, 3000]], need_mw: 15000, budget_mw: 51000,
   palette: 'ff3c00@0,ff8c00@35,ff0066@70,4b0082@100', time: '', tz: 'UTC0', name: 'ledify', ip: '', clients: 0, hot: 0,
   board_c: 31.2, sleep: 0, rise: 0, sched: [], segs: [], stream: null, boots: 1, rst: 'poweron', boot_log: [],
@@ -26,7 +26,7 @@ function run(cmd) {
   else if (k === 'off') st.power = 0;
   else if (k === 'rgb') { color = { r: +t[1], g: +t[2], b: +t[3] }; st.mode = 'solid'; }
   else if (k === 'mode') st.mode = t[1];
-  else if (k === 'palette') { st.palette = t[1].split(',').map((s, i, a) => s.includes('@') ? s : s + '@' + Math.round(i * 100 / Math.max(1, a.length - 1))).join(','); st.mode = 'palette'; }
+  else if (k === 'palette' || k === 'cover') { st[k] = t[1].split(',').map((s, i, a) => s.includes('@') ? s : s + '@' + Math.round(i * 100 / Math.max(1, a.length - 1))).join(','); if (k === 'palette') st.mode = 'palette'; }
   else if (k === 'seg') {
     if (t[1] === 'off' || t[1] === 'clear') st.segs = [];
     else if (t[1] === 'del') st.segs = st.segs.filter(s => s.i !== +t[2]);

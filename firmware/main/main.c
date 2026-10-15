@@ -153,9 +153,9 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
-static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS;
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, stripe;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_STRIPE, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -169,6 +169,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"droop", &droop, 0, 100},               // tail colour fix: red cut along the strip against voltage sag, in percent
     {"tmax", &tmax, 0, 120},                 // board temperature at which the strip is fully dimmed (starts 10 lower), 0 = off
     {"fade", &fade, 0, 5000},                // transition time in ms, 0 = instant
+    {"stripe", &stripe, 0, 100},             // gradient as stripes of N pixels per colour, 0 = blend
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -424,6 +425,7 @@ static bool set_setting(int i, int v)
     leds_set_limit(limit);
     leds_set_droop(droop);
     leds_set_fade(fade);
+    leds_set_stripe(stripe);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -960,7 +962,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
-              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
+              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<px> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
               "name<host> live<s> listen<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
@@ -996,6 +998,7 @@ void app_main(void)
     leds_set_limit(limit);
     leds_set_droop(droop);
     leds_set_fade(fade);
+    leds_set_stripe(stripe);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);

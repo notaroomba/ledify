@@ -7,7 +7,7 @@ import { sp } from './spotify';
 
 const EFFECTS = {
   solid: 'one colour', rainbow: 'moving rainbow', temp: 'colour from the temperature', spectrum: 'bass, mid and treble bars',
-  meter: 'green to red along the strip', palette: 'gradient of the album cover colours', sound: 'brightness follows the sound',
+  meter: 'green to red along the strip', palette: 'your gradient, from the Gradient card', cover: 'the album cover colours from Spotify', sound: 'brightness follows the sound',
   vu: 'lit length follows the sound', pulse: 'flashes on the beat',
 };
 const OVERLAYS = ['none', 'vu', 'pulse'];
@@ -108,11 +108,17 @@ const BUILT_IN_GRADIENTS = {
   forest: '0b3d0b@0,2e8b57@50,b2ff59@100',
   candy: 'ff6ec7@0,ffffff@50,7afcff@100',
   'warm to cool': 'ffb46b@0,ffffff@50,b4d2ff@100',
+  colombia: 'fcd116@0,fcd116@50,003893@50,003893@75,ce1126@75,ce1126@100',
 };
 const parseStops = str => (str || '').split(',').map(s => { const [c, p] = s.split('@'); return { c: '#' + c, p: +p }; }).filter(s => /^#[0-9a-f]{6}$/i.test(s.c) && s.p >= 0 && s.p <= 100);
 const sortedStops = st => [...st].sort((a, b) => a.p - b.p);
 const stopsCmd = st => sortedStops(st).map(s => s.c.slice(1).toLowerCase() + '@' + s.p).join(',');
 const stopsCss = st => 'linear-gradient(90deg, ' + sortedStops(st).map(s => s.c + ' ' + s.p + '%').join(', ') + ')';
+const stripesCss = (st, px, count) => {           // the distinct colours in turn, px pixels each, as the board draws them
+  const cols = sortedStops(st).map(s => s.c.toLowerCase()).filter((c, i, a) => !i || c !== a[i - 1]);
+  const w = px * 100 / count;
+  return 'repeating-linear-gradient(90deg, ' + cols.map((c, i) => c + ' ' + (i * w) + '% ' + ((i + 1) * w) + '%').join(', ') + ')';
+};
 const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
 const colorAt = (st, p) => {                        // the gradient's colour at p %, the same blend the board does
   const s = sortedStops(st), last = s[s.length - 1];
@@ -123,13 +129,20 @@ const colorAt = (st, p) => {                        // the gradient's colour at 
   const a = s[k], b = s[k + 1], f = b.p === a.p ? 0 : (p - a.p) / (b.p - a.p), A = hexRgb(a.c), B = hexRgb(b.c);
   return rgbHex(...A.map((v, i) => v + (B[i] - v) * f));
 };
-const loadGradients = () => { try { const v = JSON.parse(localStorage.getItem('ledify.gradients')); if (v && typeof v === 'object') return v; } catch (e) { /* none saved */ } return { ...BUILT_IN_GRADIENTS }; };
+const loadGradients = () => {                     // built-ins are always offered; one the user deleted is remembered as null
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('ledify.gradients')) || {}; } catch (e) { /* none saved */ }
+  const all = { ...BUILT_IN_GRADIENTS };
+  for (const [k, v] of Object.entries(saved)) { if (v === null) delete all[k]; else all[k] = v; }
+  return all;
+};
 const pctOf = e => Math.max(0, Math.min(100, Math.round(+e.currentTarget.value || 0)));
 export function Gradient() {
   const [stops, setStops] = createSignal(parseStops(BUILT_IN_GRADIENTS.sunset));
   const [sel, setSel] = createSignal(0);
   const [lib, setLib] = createSignal(loadGradients());
   const [from, setFrom] = createSignal(0), [to, setTo] = createSignal(100);
+  const [stripe, setStripe] = optimistic('stripe', () => state().stripe);
   let bar, nameEl;
   createEffect(() => { dev().seen; const str = state().palette; if (str && settled('palette') && stopsCmd(stops()) !== str) { setStops(parseStops(str)); setSel(0); } });
   const cur = () => stops()[Math.min(sel(), stops().length - 1)];
@@ -161,12 +174,12 @@ export function Gradient() {
     if (next.length > MAX_STOPS) { toast('That needs more than ' + MAX_STOPS + ' stops', 'warn'); return; }
     update(next, true); setSel(below.length);
   };
-  const storeLib = l => { localStorage.setItem('ledify.gradients', JSON.stringify(l)); setLib(l); };
+  const storeLib = l => { const saved = { ...l }; for (const k of Object.keys(BUILT_IN_GRADIENTS)) { if (!(k in l)) saved[k] = null; else if (l[k] === BUILT_IN_GRADIENTS[k]) delete saved[k]; } localStorage.setItem('ledify.gradients', JSON.stringify(saved)); setLib(l); };
   const saveGradient = () => { const name = nameEl.value.trim() || 'gradient ' + (Object.keys(lib()).length + 1); storeLib({ ...lib(), [name]: stopsCmd(stops()) }); nameEl.value = ''; toast('Saved "' + name + '"', 'ok', 2000); };
   const delGradient = async name => { if (await confirmDialog('Delete gradient?', '"' + name + '" will be removed from this browser.', 'Delete')) { const l = { ...lib() }; delete l[name]; storeLib(l); } };
   return <section class="card md:col-span-2">
     <h2 class="card-title">Gradient <small>click the bar to add a stop, drag a handle to move it · {stops().length} of {MAX_STOPS}</small></h2>
-    <div ref={bar} class="relative mx-3 h-12 cursor-copy rounded-xl border border-line" style={{ background: stopsCss(stops()) }} onPointerDown={e => { if (e.target === bar) addAt(pctAt(e)); }}>
+    <div ref={bar} class="relative mx-3 h-12 cursor-copy rounded-xl border border-line" style={{ background: stripe() ? stripesCss(stops(), stripe(), state().count || 300) : stopsCss(stops()) }} onPointerDown={e => { if (e.target === bar) addAt(pctAt(e)); }}>
       <Index each={stops()}>{(s, i) => <button type="button" class="absolute top-1/2 h-7 w-7 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none rounded-full border-2 border-white shadow-md active:cursor-grabbing" classList={{ 'ring-2 ring-accent ring-offset-2 ring-offset-surface': sel() === i }} style={{ left: s().p + '%', background: s().c }} aria-label={'stop ' + (i + 1) + ' at ' + s().p + '%'} onPointerDown={e => drag(i, e)} onKeyDown={e => keys(i, e)} />}</Index>
     </div>
     <div class="row mt-4">
@@ -176,6 +189,8 @@ export function Gradient() {
       <button type="button" class="btn btn-sm" onClick={() => update(sortedStops(stops()).map((s, i, a) => ({ ...s, p: a.length > 1 ? Math.round(i * 100 / (a.length - 1)) : 0 })), true)}>Space evenly</button>
       <button type="button" class="btn btn-sm" onClick={() => update([...stops()].reverse().map(s => ({ ...s, p: 100 - s.p })), true)}>Flip</button>
     </div>
+    <Slider rowClass="mt-3" label="Stripes" min={0} max={24} value={stripe} set={setStripe} send={v => 'stripe ' + v} fmt={v => v ? v + ' px each' : 'blend'} />
+    <p class="hint">Blend fades between the stops; stripes paint each colour of the gradient in turn, that many pixels each, repeating along the strip. Spotify's album colours live in the separate "cover" effect and never replace this gradient.</p>
     <h2 class="card-title mt-5">Saved gradients <small>this browser</small></h2>
     <div class="row">
       <span class="hint">place one into</span>
@@ -361,7 +376,7 @@ export function Spotify() {
       <button type="button" class="btn" onClick={sp.toggle}>{sp.connected() ? 'Disconnect' : 'Connect Spotify'}</button>
     </div>
     <div class="mt-3 flex items-center justify-between gap-3">
-      <div><div class="text-sm">Gradient from the album art</div><div class="hint">every new track spreads its cover's main colours along the strip</div></div>
+      <div><div class="text-sm">Follow the album art</div><div class="hint">each new track recolours the "cover" effect; your own gradient stays under "palette"</div></div>
       <Switch label="Album art gradient" checked={sp.auto} onChange={sp.setAuto} />
     </div>
     <div class="mt-3 flex gap-2"><For each={sp.palette()}>{hx => <span class="h-7 w-7 rounded-full border border-line" style={{ background: '#' + hx }} />}</For></div>
