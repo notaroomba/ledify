@@ -129,8 +129,8 @@ static bool set_key(esp_mqtt_event_handle_t ev, char *key, size_t n)
 // Home Assistant entities publish a bare value; turn it into the matching text command.
 static void queue_prefixed(const char *cmd, const char *data, int len)
 {
-    char c[48];
-    snprintf(c, sizeof c, "%s %.*s", cmd, len > 16 ? 16 : len, data);
+    char c[80];
+    snprintf(c, sizeof c, "%s %.*s", cmd, len > 60 ? 60 : len, data);   // the panel's audio feed is five numbers, up to 19 characters
     queue_cmd(c, strlen(c));
 }
 

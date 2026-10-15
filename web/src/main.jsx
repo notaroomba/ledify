@@ -103,7 +103,7 @@ function App() {
     <main class="mx-auto grid max-w-5xl gap-4 px-4 py-4 pb-24 md:grid-cols-2" classList={{ offline: off() }}>
       <Hero /><Colour /><Effect /><Gradient /><Sound /><Strip /><Segments /><Schedule /><Sensors /><Spotify /><Presets /><Advanced />
     </main>
-    <div class="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex flex-col items-center gap-2 px-4"><For each={ui.toasts}>{t => <div class={'toast toast-' + t.kind}>{t.text}</div>}</For></div>
+    <div class="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex flex-col items-center gap-2 px-4"><For each={ui.toasts}>{t => <div class={{ warn: 'toast toast-warn', ok: 'toast toast-ok' }[t.kind] || 'toast toast-info'}>{t.text}</div>}</For></div>
     <Confirm />
     <Broker />
     <Setup />

@@ -42,8 +42,9 @@ export const log = line => setLogText(l => (new Date().toLocaleTimeString() + ' 
 
 let client = null, ws = null, toastId = 0;
 export function toast(text, kind = 'info', ms = 3500) {
+  if (ui.toasts.some(t => t.text === text)) return;                 // the same message again just stays up
   const id = ++toastId;
-  setUi('toasts', t => [...t, { id, text, kind }]);
+  setUi('toasts', t => [...t, { id, text, kind }].slice(-4));
   setTimeout(() => setUi('toasts', t => t.filter(x => x.id !== id)), ms);
 }
 export function send(cmd) {

@@ -909,9 +909,11 @@ static void handle(char *line)
         int s = atoi(tok[1]);
         live_until = esp_timer_get_time() + (s < 0 ? 0 : s > 600 ? 600 : s) * 1000000LL;
         reply("ok");
-    } else if (!strcmp(tok[0], "audio") && n == 6) {              // 20 Hz from the panel: no reply, no state publish
-        uint8_t b[3] = {atoi(tok[2]), atoi(tok[3]), atoi(tok[4])};
-        mic_feed(atoi(tok[1]), b, atoi(tok[5]));
+    } else if (!strcmp(tok[0], "audio")) {                        // 20 Hz from the panel: no reply, no state publish
+        if (n == 6) {
+            uint8_t b[3] = {atoi(tok[2]), atoi(tok[3]), atoi(tok[4])};
+            mic_feed(atoi(tok[1]), b, atoi(tok[5]));
+        }
     } else if (!strcmp(tok[0], "ota") && n == 2) {
         char base[96];
         if (load_str("ota_base", base, sizeof base) && strncmp(tok[1], base, strlen(base))) {   // "otabase URL" pins where images may come from
