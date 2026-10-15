@@ -335,7 +335,7 @@ slider('temp_hi', v => 'temp ' + $('temp_lo').value + ' ' + v, { fmt: v => v + '
 slider('asens', () => null);
 chips($('effects'), Object.keys(EFFECTS), n => send('mode ' + n));
 chips($('overlays'), OVERLAYS, n => send('overlay ' + n));
-chips($('volts'), ['5', '12'], v => { if (v === '5' || confirm('Switch the strip output to 12 V?\nOnly for 12 V strips; 5 V pixels would be destroyed.')) send('volt ' + v); }, 'danger');
+chips($('volts'), ['5', '12'], v => { if (v === '5') send('volt 5'); else if (confirm('Switch the strip output to 12 V?\n\nOnly for 12 V strips (WS2815, WS2811). 5 V pixels are destroyed instantly and the output turns off first, so you will have to press power again.')) send('volt 12 yes'); }, 'danger');
 $('power').onclick = () => send($('power').classList.contains('on') ? 'off' : 'on');
 $('auto').onclick = () => send('auto ' + ($('auto').classList.contains('on') ? 'off' : 'on'));
 $('limitsw').onclick = () => send('limit ' + ($('limitsw').classList.contains('on') ? 0 : 1));

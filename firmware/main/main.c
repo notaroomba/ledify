@@ -6,7 +6,7 @@
 //   color solid|rainbow|temp|spectrum|meter | bright level|sound | overlay none|vu|pulse | auto on|off
 //   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
 //   temp 21.5                                      feed a temperature in for the temp colour
-//   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 | status | pd | net | help
+//   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 yes | status | pd | net | help
 //   wifi SSID PASSWORD | wifi2 SSID PASSWORD | mqtt URL [USER PASSWORD]   (saved to NVS, then the board restarts)
 // Home Assistant talks JSON to ledify/<id>/light/set; see net.c for the topics.
 //
@@ -603,7 +603,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12> live<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "volt<5|12 yes> live<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }

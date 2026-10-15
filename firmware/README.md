@@ -48,7 +48,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `night N` | Lux below which auto brightness turns the strip off, 0 (default) disables. Saved |
 | `temp LO HI` | °C shown as blue and as red by the `temp` colour, white halfway, default `15 30`. Saved; also `temp_lo N` / `temp_hi N` |
 | `temp 21.5` | Feed a temperature in; the `temp` colour uses it instead of the barometer until the next restart |
-| `volt 5` / `volt 12` | Select the output voltage. 12 V needs a PD contract of 15 V or more, and the output turns off first |
+| `volt 5` / `volt 12 yes` | Select the output voltage. 12 V must be confirmed with `yes` because it destroys 5 V pixels; it needs a charger offering 15 V or more (the board renegotiates for it) and the output turns off first |
 | `status` | JSON with power state, strip settings, colour/brightness/overlay, the saved tunables, the brightness cap, PD contract, network state, lux, temperature, pressure, accel, gyro, sound level and loudness after gain |
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
