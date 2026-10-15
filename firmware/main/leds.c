@@ -128,10 +128,19 @@ uint8_t leds_get_level(void)
 
 void leds_set_count(uint16_t n)
 {
-    led_strip_clear(strip);                 // pixels past the new end keep their last frame, so blank them first
-    count = n < 1 ? 1 : n > MAX_LEDS ? MAX_LEDS : n;
-    make_strip();                           // the RMT device sends max_leds pixels per frame
-}
+    n = n < 1 ? 1 : n > MAX_LEDS ? MAX_LEDS : n;
+    if (n == count) {
+        return;
+    }
+    if (n < count) {                        // shrink: send one frame at the old length with the tail black, so the
+        for (int i = n; i < count; i++) {   // dropped pixels go out without blanking the ones that stay lit
+            pixel(i, 0, 0, 0);
+        }
+        led_strip_refresh(strip);
+    }
+    count = n;
+    make_strip();                           // the RMT device sends max_leds pixels per frame; the main loop draws the
+}                                           // next frame right after the command, so nothing flashes
 
 uint16_t leds_get_count(void)
 {
