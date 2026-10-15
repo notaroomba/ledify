@@ -24,6 +24,7 @@ static i2c_master_dev_handle_t dev;
 static uint8_t msg_id;
 static pd_state_t st;
 static int req_mv, req_ma;
+static int max_mv = PD_WANT_MV;              // ceiling for requests, lowered by "pdmax" or the boot-loop guard
 static int pdo_pos[7];                   // object position of each stored PDO in the source's list
 static int want_min_mv;                  // 15000 while the 12 V output is selected
 static bool rerequest;                   // main asked for a different contract; the PD task sends it
@@ -154,7 +155,7 @@ static bool request_best(int min_mv)
     for (int i = 0; i < st.n_pdos; i++) {
         int ma = st.pdo_ma[i] < PD_WANT_MA ? st.pdo_ma[i] : PD_WANT_MA;
         long w = (long)st.pdo_mv[i] * ma;
-        if (st.pdo_mv[i] >= min_mv && st.pdo_mv[i] <= PD_WANT_MV &&
+        if (st.pdo_mv[i] >= min_mv && st.pdo_mv[i] <= max_mv &&
             (w > best_w || (w == best_w && st.pdo_mv[i] > st.pdo_mv[best]))) {
             best = i;
             best_w = w;
@@ -177,7 +178,7 @@ bool pd_request(int min_mv)
 {
     want_min_mv = min_mv;
     for (int i = 0; i < st.n_pdos; i++) {
-        if (st.pdo_mv[i] >= min_mv && st.pdo_mv[i] <= PD_WANT_MV) {
+        if (st.pdo_mv[i] >= min_mv && st.pdo_mv[i] <= max_mv) {
             rerequest = true;
             return true;
         }
@@ -270,4 +271,14 @@ static void pd_poll(void)
 const pd_state_t *pd_get(void)
 {
     return &st;
+}
+
+void pd_set_max_mv(int mv)
+{
+    max_mv = mv < 5000 ? 5000 : mv > PD_WANT_MV ? PD_WANT_MV : mv;
+}
+
+int pd_get_max_mv(void)
+{
+    return max_mv;
 }

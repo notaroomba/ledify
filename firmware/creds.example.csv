@@ -21,3 +21,4 @@ lux_hi,data,i16,500
 night,data,i16,0
 temp_lo,data,i16,15
 temp_hi,data,i16,30
+pdmax,data,i16,20000

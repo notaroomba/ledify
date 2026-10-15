@@ -56,9 +56,9 @@ static int lux = -1;                        // latest reading, -1 without a sens
 static float temp_in;                       // fed in over MQTT; the barometer's until then. ponytail: never expires, add a timeout if Home Assistant going away should fall back
 static bool have_temp_in;
 static int64_t live_until;                  // "live N": stream loudness/bands to MQTT until then
-static uint32_t boots;                      // boot counter and the previous boot's PD result, kept in NVS so a
-static char prev_pd[96];                    // trip to a charger with no Wi-Fi can still be read afterwards
-static bool pd_saved;
+static uint32_t boots;                      // boot counter and a log of the last four boots (reset reason, PD result,
+static char boot_log[4][64];                // whether the boot stayed up), in NVS so a trip to a charger with no
+static bool pd_saved, up_saved, safe_boot;  // Wi-Fi can still be read afterwards
 
 static const char *reset_name(void)
 {
@@ -73,6 +73,18 @@ static const char *reset_name(void)
     }
 }
 
+static void write_log0(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "l0", boot_log[0]);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// Shift the log, start this boot's entry. Two previous boots that never reached 15 s means something about the
+// supply kills us after negotiation: stay at 5 V this time so the board at least comes up and can be asked.
 static void boot_bookkeeping(void)
 {
     nvs_handle_t h;
@@ -82,30 +94,34 @@ static void boot_bookkeeping(void)
     nvs_get_u32(h, "boots", &boots);
     boots++;
     nvs_set_u32(h, "boots", boots);
-    size_t len = sizeof prev_pd;
-    if (nvs_get_str(h, "last_pd", prev_pd, &len) != ESP_OK) {
-        prev_pd[0] = 0;
+    const char *keys[4] = {"l0", "l1", "l2", "l3"};
+    for (int i = 3; i >= 1; i--) {
+        size_t len = sizeof boot_log[i];
+        if (nvs_get_str(h, keys[i - 1], boot_log[i], &len) != ESP_OK) {
+            boot_log[i][0] = 0;
+        }
+        nvs_set_str(h, keys[i], boot_log[i]);
     }
-    nvs_erase_key(h, "last_pd");            // if this boot never negotiates, the next one reads an empty record
+    safe_boot = boot_log[1][0] && boot_log[2][0] && !strstr(boot_log[1], " ok") && !strstr(boot_log[2], " ok");
+    snprintf(boot_log[0], sizeof boot_log[0], "#%lu %s%s", (unsigned long)boots, reset_name(), safe_boot ? " safe5v" : "");
+    nvs_set_str(h, "l0", boot_log[0]);
     nvs_commit(h);
     nvs_close(h);
+    if (safe_boot) {
+        pd_set_max_mv(5000);
+    }
 }
 
 static void save_pd_result(void)
 {
     const pd_state_t *pd = pd_get();
-    char s[96];
-    int w = snprintf(s, sizeof s, "offers");
-    for (int i = 0; i < pd->n_pdos; i++) {
-        w += snprintf(s + w, sizeof s - w, " %d/%d", pd->pdo_mv[i], pd->pdo_ma[i]);
+    int w = strlen(boot_log[0]);
+    w += snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " pd");
+    for (int i = 0; i < pd->n_pdos && w < (int)sizeof boot_log[0] - 12; i++) {
+        w += snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " %d/%d", pd->pdo_mv[i] / 100, pd->pdo_ma[i] / 100);
     }
-    snprintf(s + w, sizeof s - w, " got %d/%d", pd->contract_mv, pd->contract_ma);
-    nvs_handle_t h;
-    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_str(h, "last_pd", s);
-        nvs_commit(h);
-        nvs_close(h);
-    }
+    snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " got %d/%d", pd->contract_mv / 100, pd->contract_ma / 100);
+    write_log0();
 }
 static bool power;
 static int volt = 5;
@@ -115,8 +131,9 @@ static QueueHandle_t cmd_q;
 // Saved tunables. The key is the command, the Home Assistant topic ledify/<id>/<key>/set and the status field.
 static int16_t gain = 25, lux_lo = 0, lux_hi = 500, night = 0, temp_lo = 15, temp_hi = 30;
 static int16_t limit;                       // see settings[]
+static int16_t pdmax = 20000;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -125,6 +142,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"temp_lo", &temp_lo, -40, 100},
     {"temp_hi", &temp_hi, -40, 100},
     {"limit", &limit, 0, 1},                 // 1 = dim to the power budget, 0 = send what was asked and warn
+    {"pdmax", &pdmax, 5000, 20000},          // highest PD voltage to request, in mV
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -291,6 +309,10 @@ static bool set_setting(int i, int v)
     dirty_at = esp_timer_get_time();
     mic_set_gain(gain);
     leds_set_limit(limit);
+    if (i == S_PDMAX) {
+        pd_set_max_mv(pdmax);
+        pd_request(0);                       // renegotiate under the new ceiling
+    }
     return true;
 }
 
@@ -372,7 +394,8 @@ static void status(char *out, size_t n)
     }
     w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu",
                   (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw());
-    w += snprintf(out + w, n - w, ",\"boots\":%lu,\"rst\":\"%s\",\"prev_pd\":\"%s\"", (unsigned long)boots, reset_name(), prev_pd);
+    w += snprintf(out + w, n - w, ",\"boots\":%lu,\"rst\":\"%s\",\"pdmax\":%d,\"boot_log\":[\"%s\",\"%s\",\"%s\",\"%s\"]",
+                  (unsigned long)boots, reset_name(), pd_get_max_mv(), boot_log[0], boot_log[1], boot_log[2], boot_log[3]);
     if (d.have_lux) {
         w += snprintf(out + w, n - w, ",\"lux\":%.1f", d.lux);
     }
@@ -718,8 +741,9 @@ void app_main(void)
     leds_init();
     load_cfg();
     leds_set_limit(limit);
-    boot_bookkeeping();
-    ESP_LOGI(TAG, "boot %lu, reset %s, previous pd: %s", (unsigned long)boots, reset_name(), prev_pd[0] ? prev_pd : "none");
+    pd_set_max_mv(pdmax);
+    boot_bookkeeping();                     // may lower it again for a safe boot
+    ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);
     ESP_LOGI(TAG, "leds up, %d x %s", leds_get_count(), leds_type_name());
     vTaskDelay(pdMS_TO_TICKS(PD_START_DELAY_MS));
     pd_init(bus);
@@ -780,6 +804,11 @@ void app_main(void)
         if (!pd_saved && pd_get()->ready && now > 5000000) {    // keep this boot's negotiation for the next boot to report
             save_pd_result();
             pd_saved = true;
+        }
+        if (!up_saved && now > 15000000) {                     // stayed up: this supply works
+            strncat(boot_log[0], " ok", sizeof boot_log[0] - strlen(boot_log[0]) - 1);
+            write_log0();
+            up_saved = true;
         }
         if (dirty_at && now - dirty_at > 2000000) {          // sliders send many values; write NVS once they settle
             save_count(leds_get_count());

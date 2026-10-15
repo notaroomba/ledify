@@ -55,6 +55,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
 | `wifi2 SSID PASSWORD` | Save a fallback network and restart (`wifi2 off` clears it). The board joins the primary first and switches after `WIFI_FAILS_BEFORE_SWITCH` failed attempts, alternating until one works |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
+| `pdmax N` | Highest PD voltage to request, 5000-20000 mV (saved). `status` also reports `boots`, the reset reason and a log of the last four boots with what each charger offered; two boots in a row that die early make the next one stay at 5 V |
 | `limit 0\|1` | 1 dims to the power budget, 0 (default) sends what was asked and only reports the estimate. Saved |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `palette hex,hex,...` | Up to 8 colour stops (`ff8800,2244ff`) spread along the strip as a gradient; also selects the `palette` colour source (the panel sends the album cover's colours) |
