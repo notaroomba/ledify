@@ -534,10 +534,14 @@ static void handle(char *line)
     } else if (s >= 0 && n == 2) {
         snprintf(out, sizeof out, "err %s %d-%d", tok[0], settings[s].lo, settings[s].hi);
         reply(set_setting(s, atoi(tok[1])) ? "ok" : out);
-    } else if (!strcmp(tok[0], "volt") && n == 2) {
+    } else if (!strcmp(tok[0], "volt") && (n == 2 || n == 3)) {
         int v = atoi(tok[1]);
         if (v != 5 && v != 12) {
             reply("err volt 5|12");
+            return;
+        }
+        if (v == 12 && !(n == 3 && !strcmp(tok[2], "yes"))) {    // 12 V kills 5 V pixels: every channel must say so explicitly
+            reply("12 V destroys 5 V strips. If the strip really is 12 V send: volt 12 yes");
             return;
         }
         const pd_state_t *pd = pd_get();
