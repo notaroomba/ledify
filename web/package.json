@@ -1,0 +1,12 @@
+{
+  "name": "ledify-panel",
+  "private": true,
+  "description": "Ledify control panel: static page, Tailwind CSS compiled at build time",
+  "scripts": {
+    "build": "tailwindcss -i src/input.css -o dist/style.css --minify",
+    "watch": "tailwindcss -i src/input.css -o dist/style.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}
