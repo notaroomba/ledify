@@ -108,7 +108,7 @@ const BUILT_IN_GRADIENTS = {
   forest: '0b3d0b@0,2e8b57@50,b2ff59@100',
   candy: 'ff6ec7@0,ffffff@50,7afcff@100',
   'warm to cool': 'ffb46b@0,ffffff@50,b4d2ff@100',
-  colombia: 'fcd116@0,fcd116@50,003893@50,003893@75,ce1126@75,ce1126@100',
+  colombia: 'fcd116@0,fcd116@50,003893@50,003893@75,ff0000@75,ff0000@100',
 };
 const parseStops = str => (str || '').split(',').map(s => { const [c, p] = s.split('@'); return { c: '#' + c, p: +p }; }).filter(s => /^#[0-9a-f]{6}$/i.test(s.c) && s.p >= 0 && s.p <= 100);
 const sortedStops = st => [...st].sort((a, b) => a.p - b.p);
