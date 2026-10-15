@@ -33,6 +33,7 @@ void leds_set_palette(int slot, const uint8_t (*stops)[3], const uint8_t *pos, i
 void leds_palette_str(int slot, char *out, size_t n);   // the stops as "rrggbb@pct,..."
 void leds_set_stripes(const uint8_t *len, int n);   // stripes: run length per distinct stop colour (cycling); n = 0 blends instead
 void leds_stripes_str(char *out, size_t n);         // "4,2,2" or "0"
+void leds_set_scroll(int16_t pps);              // the gradient or stripes travel along the strip at this many pixels per second; negative = the other way
 void leds_set_droop(uint8_t pct);               // tail colour fix 0..100: cut red along the strip against voltage sag, 0 = off
 // lvl: brightness after every modifier. lit: pixels on from the start of the strip (count for all of them).
 // bands: bass/mid/treble 0..255 for the spectrum bars.

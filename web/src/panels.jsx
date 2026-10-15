@@ -147,6 +147,7 @@ export function Gradient() {
   const distinct = () => sortedStops(stops()).map(s => s.c.toLowerCase()).filter((c, i, a) => !i || c !== a[i - 1]);
   const perColour = () => distinct().map((_, k) => lens()[k % lens().length]);
   const setLens = l => { const str = l.length ? l.join(',') : '0'; setStripeStr(str); send('stripe ' + str); };
+  const [scroll, setScroll] = optimistic('scroll', () => state().scroll);
   let bar, nameEl;
   createEffect(() => { dev().seen; const str = state().palette; if (str && settled('palette') && stopsCmd(stops()) !== str) { setStops(parseStops(str)); setSel(0); } });
   const cur = () => stops()[Math.min(sel(), stops().length - 1)];
@@ -200,7 +201,8 @@ export function Gradient() {
         <For each={distinct()}>{(c, i) => <label class="flex items-center gap-1 text-xs text-muted"><span class="inline-block h-5 w-5 rounded-full border border-line" style={{ background: c }} /><input type="number" min="1" max="100" class="field h-9 w-16" aria-label={'pixels for ' + c} value={perColour()[i()]} onChange={e => { const l = perColour(); l[i()] = Math.max(1, Math.min(100, Math.round(+e.currentTarget.value || 1))); setLens(l); }} /> px</label>}</For>
       </Show>
     </div>
-    <p class="hint">Blend fades between the stops; stripes paint each colour of the gradient in turn for the number of pixels set next to it, repeating along the strip. Spotify's album colours live in the separate "cover" effect and never replace this gradient.</p>
+    <Slider rowClass="mt-2" label="Scroll" min={-60} max={60} value={scroll} set={setScroll} send={v => 'scroll ' + v} fmt={v => v > 0 ? 'clockwise ' + v + ' px/s' : v < 0 ? 'counterclockwise ' + (-v) + ' px/s' : 'still'} />
+    <p class="hint">Blend fades between the stops; stripes paint each colour of the gradient in turn for the number of pixels set next to it, repeating along the strip. Scroll moves the pattern along the strip (clockwise means towards the end of the strip; swap if your ring is wired the other way). Spotify's album colours live in the separate "cover" effect and never replace this gradient.</p>
     <h2 class="card-title mt-5">Saved gradients <small>this browser</small></h2>
     <div class="row">
       <span class="hint">place one into</span>

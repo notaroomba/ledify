@@ -25,6 +25,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_attr.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -145,6 +146,11 @@ static bool off_pending;                    // "off" fades first; the rail goes 
 static int hot_scale = 255;                 // brightness left by the thermal limit, 0..255
 static float board_c = -100;                // latest board temperature
 static int64_t restart_at;                  // a saved network setting restarts the board shortly after
+// What the strip was doing, in RTC memory: it survives a software restart (an update, a saved network setting), not
+// a power cut, so the strip comes back as it was after an OTA without ever powering up a strip on its own at boot.
+#define KEEP_MAGIC 0x4c454431
+static RTC_NOINIT_ATTR struct { uint32_t magic; uint8_t power, sound, color, overlay, level, r, g, b; } keep;
+static bool restore_power;
 static QueueHandle_t cmd_q;
 
 // Saved tunables. The key is the command, the Home Assistant topic ledify/<id>/<key>/set and the status field.
@@ -153,9 +159,9 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
-static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS;
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -169,6 +175,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"droop", &droop, 0, 100},               // tail colour fix: red cut along the strip against voltage sag, in percent
     {"tmax", &tmax, 0, 120},                 // board temperature at which the strip is fully dimmed (starts 10 lower), 0 = off
     {"fade", &fade, 0, 5000},                // transition time in ms, 0 = instant
+    {"scroll", &scroll, -200, 200},          // gradient/stripes travel, pixels per second; negative = the other way
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -446,6 +453,7 @@ static bool set_setting(int i, int v)
     leds_set_limit(limit);
     leds_set_droop(droop);
     leds_set_fade(fade);
+    leds_set_scroll(scroll);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -621,6 +629,15 @@ static void publish(void)
              "{\"state\":\"%s\",\"brightness\":%d,\"color_mode\":\"rgb\",\"color\":{\"r\":%d,\"g\":%d,\"b\":%d},\"effect\":\"%s\"}",
              power ? "ON" : "OFF", leds_get_level(), r, g, b, effect_name());
     status(st, sizeof st);
+    keep.magic = KEEP_MAGIC;
+    keep.power = power;
+    keep.sound = sound_on;
+    keep.color = color;
+    keep.overlay = overlay;
+    keep.level = leds_get_level();
+    keep.r = r;
+    keep.g = g;
+    keep.b = b;
     sensor_data_t d;
     sensors_read(&d);
     snprintf(sens, sizeof sens, "{\"lux\":%.1f,\"temp_c\":%.2f,\"pressure_kpa\":%.2f,\"sound_db\":%.1f}",
@@ -996,7 +1013,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
-              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
+              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> scroll<px/s> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
               "name<host> live<s> listen<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
@@ -1029,9 +1046,20 @@ void app_main(void)
 
     leds_init();
     load_cfg();
+    if (esp_reset_reason() == ESP_RST_SW && keep.magic == KEEP_MAGIC && keep.color < COLOR_STREAM && keep.overlay <= OVER_PULSE) {
+        color = keep.color;                                      // back to what the strip showed before the update
+        overlay = keep.overlay;
+        sound_on = keep.sound;
+        leds_fill(keep.r, keep.g, keep.b);
+        leds_set_level(keep.level);
+        restore_power = keep.power;
+        ESP_LOGI(TAG, "restoring the strip from before the restart (power %d)", keep.power);
+    }
+    keep.magic = 0;
     leds_set_limit(limit);
     leds_set_droop(droop);
     leds_set_fade(fade);
+    leds_set_scroll(scroll);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);
@@ -1100,7 +1128,13 @@ void app_main(void)
             leds_power(false);
         }
         if (restart_at && now > restart_at) {
+            publish();                                           // snapshot for the restore
             esp_restart();
+        }
+        if (restore_power && (pd_get()->ready || now > 3000000)) {   // once the supply is negotiated (or it is not coming)
+            restore_power = false;
+            set_power(true);
+            pub_due = now + 150000;
         }
         if (power && stream_take_frame()) {                     // a LAN frame arrived: show it right away
             frame();

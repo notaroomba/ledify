@@ -37,6 +37,7 @@ static uint8_t pal_pos[2][LED_MAX_STOPS];                 // and their position 
 static int npal[2] = {1, 1};
 static uint8_t stripes[LED_MAX_STOPS];                   // stripes: pixels per distinct stop colour, cycling; none = blend
 static int nstripes;
+static int16_t scroll;                                    // pixels per second the palette pattern moves, 0 = still
 static leds_color_t last_src = COLOR_SOLID;               // what the previous frame showed, for the colour easing rule
 static bool segs_on(void);
 static uint8_t droop;                                     // tail colour fix in %, see leds_frame()
@@ -243,6 +244,10 @@ static void render(leds_color_t c, int i, int n, uint8_t r, uint8_t g, uint8_t b
     case COLOR_PALETTE:
     case COLOR_COVER: {                                         // blend between the two stops around this pixel, 8.8 fixed point
         int sl = c == COLOR_COVER, np = npal[sl];
+        if (scroll) {                                           // scrolling: this pixel shows what pixel i - travelled showed at the start
+            int64_t px = esp_timer_get_time() * scroll / 1000000;
+            i = (int)(((i - px) % n + n) % n);
+        }
         if (nstripes) {                                         // stripes: the distinct stop colours in turn, each its own run length
             int idx[LED_MAX_STOPS], nd = 0, period = 0;
             for (int k = 0; k < np; k++) {
@@ -469,17 +474,27 @@ const char *leds_color_name(leds_color_t c)
     return src_names[c];
 }
 
+static bool moving(leds_color_t c)
+{
+    return c == COLOR_RAINBOW || (scroll && (c == COLOR_PALETTE || c == COLOR_COVER));
+}
+
 bool leds_animated(leds_color_t c)
 {
-    if (c == COLOR_RAINBOW) {
+    if (moving(c)) {
         return true;
     }
     for (int k = 0; k < LED_MAX_SEGS; k++) {
-        if (segs[k].on && segs[k].c == COLOR_RAINBOW) {
+        if (segs[k].on && moving(segs[k].c)) {
             return true;
         }
     }
     return false;
+}
+
+void leds_set_scroll(int16_t pps)
+{
+    scroll = pps;
 }
 
 void leds_set_fade(uint16_t ms)

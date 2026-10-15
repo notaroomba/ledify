@@ -62,6 +62,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `palette hex[@pct],...` | Up to 16 colour stops as a gradient along the strip, each with an optional position in percent (`ff8800@0,2244ff@35,ffffff@100`; without positions they are spread evenly, and the stops are sorted by position). Also selects the `palette` colour source; `status` reports the stops as `palette`. Saved. The panel's gradient editor uses this |
 | `stripe N` / `stripe N,N,...` | Show the gradient as stripes instead of a blend: each distinct stop colour in turn, N pixels each, or one length per colour (`stripe 4,2,2`), repeating along the strip; `stripe 0` blends again. Saved |
+| `scroll N` | The gradient or its stripes travel along the strip at N pixels per second (negative = the other way, 0 = still), so a ring turns clockwise or counterclockwise. Saved |
 | `cover hex[@pct],...` | The same, into a second gradient shown by the `cover` colour source, so the album-cover colours the panel sends from Spotify never replace your own gradient; `status` reports it as `cover` |
 | `seg N START END [color [rrggbb]]` | Zone N (1-6) covers pixels START to END-1 with its own colour source (`solid`, `rainbow`, `temp`, `spectrum`, `meter`, `palette`) and solid colour; pixels outside every zone keep the strip's. `seg` lists them, `seg del N` and `seg off` remove. Saved |
 | `sleep N` | Fade out over N minutes, then off; `sleep 0` cancels. `status` shows the seconds left as `sleep` |
@@ -138,6 +139,8 @@ strip moves towards the new one by a share of the remaining distance each redraw
 moving styles switch at once (a cross-fade between two stripe layouts shows muddled in-between colours), and
 sound-reactive styles and LAN streams always draw instantly. The BOOT button on the board toggles the
 output with a short press.
+
+**Across a restart.** An update or a saved network setting restarts the board; what the strip showed (power, colour, effect, brightness) is kept in RTC memory and restored once the supply is negotiated. A power cut still starts dark.
 
 **Sleep and sunrise.** `sleep N` scales the brightness linearly to zero over N minutes and turns the output off;
 `rise N` turns it on and scales from zero up to the set level. Both show their remaining seconds in `status`.
