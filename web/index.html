@@ -176,6 +176,13 @@
   </section>
 
   <section class="card wide">
+    <h2>Spotify <small id="spstate">not connected</small></h2>
+    <div class="row"><img id="spart" style="width:64px;height:64px;border-radius:8px;background:#0f1218;object-fit:cover" alt=""><div style="flex:1;min-width:160px"><div id="sptrack" style="font-weight:600">—</div><div id="spartist" class="hint" style="margin:0"></div></div><button class="btn" id="splogin">Connect Spotify</button></div>
+    <div class="toggle"><div><div class="t">Colours from the album art</div><div class="d">every new track sets the strip colour from its cover</div></div><button class="switch" id="spauto"></button></div>
+    <div class="row" style="margin-top:4px"><label class="hint" style="margin:0;width:110px">Client ID</label><input type="text" id="spclient" placeholder="only needed if the site has none" style="flex:1;min-width:200px"></div>
+  </section>
+
+  <section class="card wide">
     <h2>Presets <small>saved in this browser</small></h2>
     <div class="row"><input type="text" id="pname" placeholder="name this look" style="flex:1;min-width:140px"><button class="btn primary" id="psave">Save current</button></div>
     <div class="chips" id="presets" style="margin-top:10px"></div>
@@ -421,6 +428,91 @@ function astop() {
   $('astate').textContent = 'board mic';
 }
 $('astop').onclick = astop;
+
+// ---- Spotify "now playing": authorization code + PKCE in the browser, no server and no client secret.
+// The client ID is filled in at deploy time from the SPOTIFY_CLIENT_ID variable, or typed into the panel.
+const SPOTIFY_CLIENT_ID = '__SPOTIFY_CLIENT_ID__';
+const SP_REDIRECT = location.origin + location.pathname;
+function spClientId() { return localStorage.getItem('ledify.sp.client') || (SPOTIFY_CLIENT_ID.startsWith('__') ? '' : SPOTIFY_CLIENT_ID); }
+function spTok() { try { return JSON.parse(localStorage.getItem('ledify.sp.token')); } catch (e) { return null; } }
+$('spclient').value = localStorage.getItem('ledify.sp.client') || '';
+$('spclient').onchange = () => localStorage.setItem('ledify.sp.client', $('spclient').value.trim());
+$('spauto').classList.toggle('on', localStorage.getItem('ledify.sp.auto') === '1');
+$('spauto').onclick = () => { const on = !$('spauto').classList.contains('on'); $('spauto').classList.toggle('on', on); localStorage.setItem('ledify.sp.auto', on ? '1' : '0'); if (on) spLast = ''; };
+async function spLogin() {
+  const id = spClientId();
+  if (!id) { $('spstate').textContent = 'enter the client ID first'; return; }
+  const verifier = [...crypto.getRandomValues(new Uint8Array(48))].map(b => ('0' + b.toString(16)).slice(-2)).join('');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  localStorage.setItem('ledify.sp.verifier', verifier);
+  const q = new URLSearchParams({ client_id: id, response_type: 'code', redirect_uri: SP_REDIRECT, scope: 'user-read-currently-playing user-read-playback-state', code_challenge_method: 'S256', code_challenge: challenge });
+  location.href = 'https://accounts.spotify.com/authorize?' + q;
+}
+async function spToken(body) {
+  const r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: spClientId(), ...body }) });
+  if (!r.ok) throw new Error('token ' + r.status);
+  const t = await r.json(); t.expires_at = Date.now() + t.expires_in * 1000 - 60000;
+  if (!t.refresh_token) t.refresh_token = (spTok() || {}).refresh_token;
+  localStorage.setItem('ledify.sp.token', JSON.stringify(t)); return t;
+}
+async function spAccess() {
+  let t = spTok(); if (!t) return null;
+  if (Date.now() > t.expires_at) t = await spToken({ grant_type: 'refresh_token', refresh_token: t.refresh_token });
+  return t.access_token;
+}
+$('splogin').onclick = () => { if (spTok()) { localStorage.removeItem('ledify.sp.token'); $('splogin').textContent = 'Connect Spotify'; $('spstate').textContent = 'not connected'; $('sptrack').textContent = '—'; $('spartist').textContent = ''; $('spart').src = ''; } else spLogin(); };
+(async () => {
+  const code = new URLSearchParams(location.search).get('code');
+  if (code) {
+    try { await spToken({ grant_type: 'authorization_code', code, redirect_uri: SP_REDIRECT, code_verifier: localStorage.getItem('ledify.sp.verifier') }); }
+    catch (e) { $('spstate').textContent = 'login failed: ' + e.message; }
+    history.replaceState(null, '', location.pathname);
+  }
+  if (spTok()) { $('splogin').textContent = 'Disconnect'; spPoll(); }
+})();
+let spLast = '';
+async function spPoll() {
+  if (!spTok()) return;
+  try {
+    const tok = await spAccess();
+    const r = await fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { Authorization: 'Bearer ' + tok } });
+    if (r.status === 204) { $('spstate').textContent = 'nothing playing'; return; }
+    if (!r.ok) throw new Error('api ' + r.status);
+    const j = await r.json(), it = j.item;
+    if (!it) { $('spstate').textContent = 'nothing playing'; return; }
+    $('spstate').textContent = j.is_playing ? 'playing' : 'paused';
+    $('sptrack').textContent = it.name; $('spartist').textContent = (it.artists || []).map(a => a.name).join(', ') + (it.album ? ' · ' + it.album.name : '');
+    const art = it.album && it.album.images && it.album.images.length ? it.album.images[Math.min(1, it.album.images.length - 1)].url : '';
+    if (art) $('spart').src = art;
+    if (it.id !== spLast) { spLast = it.id; if (art && $('spauto').classList.contains('on')) colourFromArt(art); }
+  } catch (e) { $('spstate').textContent = 'Spotify: ' + e.message; }
+}
+setInterval(spPoll, 5000);
+// Dominant saturated colour of the cover: skip near-black, near-white and grey pixels, bucket the rest, take the
+// biggest bucket weighted by saturation, then push it to full intensity (the strip's level handles brightness).
+function colourFromArt(url) {
+  const img = new Image(); img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = c.height = 40; const g = c.getContext('2d'); g.drawImage(img, 0, 0, 40, 40);
+    let d; try { d = g.getImageData(0, 0, 40, 40).data; } catch (e) { $('spstate').textContent = 'cover blocked by CORS'; return; }
+    const bins = {};
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], gg = d[i + 1], b = d[i + 2], mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), sat = mx ? (mx - mn) / mx : 0;
+      if (mx < 50 || sat < 0.3) continue;
+      const k = (r >> 5) + ',' + (gg >> 5) + ',' + (b >> 5), bn = bins[k] || (bins[k] = { n: 0, r: 0, g: 0, b: 0, s: 0 });
+      bn.n++; bn.r += r; bn.g += gg; bn.b += b; bn.s += sat;
+    }
+    let best = null, score = -1;
+    for (const bn of Object.values(bins)) { const sc = bn.n * (bn.s / bn.n + 0.2); if (sc > score) { score = sc; best = bn; } }
+    if (!best) { $('spstate').textContent = 'cover has no strong colour'; return; }
+    const r = best.r / best.n, gg = best.g / best.n, b = best.b / best.n, mx = Math.max(r, gg, b);
+    const hex = '#' + [r, gg, b].map(v => ('0' + Math.round(v * 255 / mx).toString(16)).slice(-2)).join('');
+    $('color').value = hex; sendColor(hex);
+  };
+  img.onerror = () => { $('spstate').textContent = 'could not load the cover'; };
+  img.src = url;
+}
 
 // ---- presets (this browser)
 function presets() { try { return JSON.parse(localStorage.getItem('ledify.presets') || '{}'); } catch (e) { return {}; } }
