@@ -7,6 +7,7 @@
 #include "board.h"
 #include "fft.h"
 #include "driver/i2s_std.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -26,6 +27,7 @@ static volatile uint8_t loud, pulse, bands[3];
 static uint32_t peak, bpeak[3];
 static int32_t avg;
 static int hold, nblock;
+static volatile uint32_t block_max_us, drops;   // real-time check, read and reset by mic_stats()
 
 // One 8 ms block: RMS -> gain -> peak follower -> loudness, onset detection, and the FFT bands every 4th block.
 static void block(void)
@@ -74,7 +76,14 @@ static void mic_task(void *arg)
     size_t n;
     for (;;) {
         if (i2s_channel_read(rx, raw, sizeof raw, &n, 1000) == ESP_OK && n == sizeof raw) {
+            int64_t t0 = esp_timer_get_time();
             block();
+            uint32_t us = esp_timer_get_time() - t0;
+            if (us > block_max_us) {
+                block_max_us = us;
+            }
+        } else {
+            drops++;                                      // a late read means the DMA ring overran: audio lost
         }
     }
 }
@@ -141,4 +150,12 @@ float mic_db(void)
     float r = mic_level();
     float db = r > 0 ? MIC_DB_FULL_SCALE + 20 * log10f(r * 1.4142f) : 0;
     return db < MIC_DB_FLOOR ? MIC_DB_FLOOR : db;
+}
+
+void mic_stats(uint32_t *max_us, uint32_t *dropped)
+{
+    *max_us = block_max_us;
+    *dropped = drops;
+    block_max_us = 0;
+    drops = 0;
 }

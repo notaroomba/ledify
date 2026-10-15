@@ -614,6 +614,7 @@ void app_main(void)
     ESP_LOGI(TAG, "%s", snap);
 
     int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0;
+    uint32_t frame_max_us = 0, frames = 0;
     cmd_t cmd;
     for (;;) {
         leds_set_budget_mw(power_budget_mw());
@@ -631,9 +632,18 @@ void app_main(void)
             const pd_state_t *pd = pd_get();
             char net[96];
             net_status(net, sizeof net);
-            ESP_LOGI(TAG, "up %llds, pd cc%d ready=%d %dmV/%dmA, ble %s, %s, power %d, mode %s",
+            uint32_t mic_us = 0, mic_drops = 0;
+            if (have_mic) {
+                mic_stats(&mic_us, &mic_drops);
+            }
+            ESP_LOGI(TAG, "up %llds, pd cc%d ready=%d %dmV/%dmA, ble %s, %s, power %d, mode %s, "
+                     "audio %luus/8000 dropped %lu, frame %luus %lu fps",
                      now / 1000000, pd->cc, pd->ready, pd->contract_mv, pd->contract_ma,
-                     ble_connected() ? "connected" : "advertising", net, power, effect_name());
+                     ble_connected() ? "connected" : "advertising", net, power, effect_name(),
+                     (unsigned long)mic_us, (unsigned long)mic_drops, (unsigned long)frame_max_us,
+                     (unsigned long)(frames * 1000000 / (uint32_t)(now - last_beat)));
+            frame_max_us = 0;
+            frames = 0;
             last_beat = now;
         }
         if (now - last_pub > 30000000) {
@@ -642,6 +652,11 @@ void app_main(void)
         }
         if (power && now - last_frame > (live() ? FRAME_MS * 1000 : 1000000)) {
             frame();                                    // pixels only latch while powered, so still frames go out again once a second
+            uint32_t us = esp_timer_get_time() - now;
+            if (us > frame_max_us) {
+                frame_max_us = us;
+            }
+            frames++;
             last_frame = now;
         }
         vTaskDelay(pdMS_TO_TICKS(5));
