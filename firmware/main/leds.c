@@ -32,9 +32,9 @@ static uint32_t budget_mw = LED_BUDGET_NO_PD_MW;
 static uint32_t need_mw;                   // the last frame's estimated draw at the requested level
 static bool limit_on;                      // scale brightness to the budget (else just report)
 static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour set gives white
-static uint8_t pal[LED_MAX_STOPS][3] = {{255, 255, 255}};  // palette stops in strip order, with their position in %
-static uint8_t pal_pos[LED_MAX_STOPS];
-static int npal = 1;
+static uint8_t pal[2][LED_MAX_STOPS][3] = {{{255, 255, 255}}, {{255, 255, 255}}};   // gradient stops per slot (user, cover), in strip order
+static uint8_t pal_pos[2][LED_MAX_STOPS];                 // and their position in %
+static int npal[2] = {1, 1};
 static uint8_t droop;                                     // tail colour fix in %, see leds_frame()
 static uint16_t fade_ms = FADE_MS;
 static uint8_t shown[MAX_LEDS][3];                        // what is on the strip now (before brightness), eased towards fb
@@ -43,7 +43,7 @@ static bool settled = true;
 static int64_t last_us;
 typedef struct { uint16_t a, b; leds_color_t c; uint8_t r, g, bl; bool on; } seg_t;
 static seg_t segs[LED_MAX_SEGS];
-static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "stream"};
+static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "stream"};
 static uint8_t stream_fb[MAX_LEDS][3];
 static int64_t stream_at;
 static uint8_t hue, temp_pos = 128, last_cap;
@@ -236,17 +236,19 @@ static void render(leds_color_t c, int i, int n, uint8_t r, uint8_t g, uint8_t b
     case COLOR_RAINBOW:
         hsv(hue + i * 256 / n, p, p + 1, p + 2);
         break;
-    case COLOR_PALETTE: {                                       // blend between the two stops around this pixel, 8.8 fixed point
+    case COLOR_PALETTE:
+    case COLOR_COVER: {                                         // blend between the two stops around this pixel, 8.8 fixed point
+        int sl = c == COLOR_COVER, np = npal[sl];
         uint32_t x = n > 1 ? (uint32_t)i * 100 * 256 / (n - 1) : 0;   // position along the run in %, 8.8
         int k = 0;
-        while (k < npal - 2 && x >= (uint32_t)pal_pos[k + 1] << 8) {
+        while (k < np - 2 && x >= (uint32_t)pal_pos[sl][k + 1] << 8) {
             k++;
         }
-        int k1 = k + 1 < npal ? k + 1 : k;
-        uint32_t p0 = (uint32_t)pal_pos[k] << 8, p1 = (uint32_t)pal_pos[k1] << 8;
+        int k1 = k + 1 < np ? k + 1 : k;
+        uint32_t p0 = (uint32_t)pal_pos[sl][k] << 8, p1 = (uint32_t)pal_pos[sl][k1] << 8;
         uint32_t f = x <= p0 || p1 <= p0 ? 0 : x >= p1 ? 256 : (x - p0) * 256 / (p1 - p0);   // before the first stop and after the last: that stop
         for (int ch = 0; ch < 3; ch++) {
-            p[ch] = (pal[k][ch] * (256 - f) + pal[k1][ch] * f) >> 8;
+            p[ch] = (pal[sl][k][ch] * (256 - f) + pal[sl][k1][ch] * f) >> 8;
         }
         break;
     }
@@ -370,34 +372,37 @@ uint32_t leds_get_budget_mw(void)
     return budget_mw;
 }
 
-void leds_set_palette(const uint8_t (*stops)[3], const uint8_t *pos, int n)
+void leds_set_palette(int sl, const uint8_t (*stops)[3], const uint8_t *pos, int n)
 {
-    npal = n < 1 ? 1 : n > LED_MAX_STOPS ? LED_MAX_STOPS : n;
-    for (int i = 0; i < npal; i++) {
+    sl = sl ? 1 : 0;
+    int np = npal[sl] = n < 1 ? 1 : n > LED_MAX_STOPS ? LED_MAX_STOPS : n;
+    uint8_t (*p)[3] = pal[sl], *pp = pal_pos[sl];
+    for (int i = 0; i < np; i++) {
         for (int ch = 0; ch < 3; ch++) {
-            pal[i][ch] = stops[i][ch];
+            p[i][ch] = stops[i][ch];
         }
-        pal_pos[i] = pos ? (pos[i] > 100 ? 100 : pos[i]) : npal > 1 ? i * 100 / (npal - 1) : 0;
+        pp[i] = pos ? (pos[i] > 100 ? 100 : pos[i]) : np > 1 ? i * 100 / (np - 1) : 0;
     }
-    for (int i = 1; i < npal; i++) {                             // keep the stops in strip order (stable insertion sort)
-        for (int j = i; j > 0 && pal_pos[j - 1] > pal_pos[j]; j--) {
-            uint8_t t = pal_pos[j];
-            pal_pos[j] = pal_pos[j - 1];
-            pal_pos[j - 1] = t;
+    for (int i = 1; i < np; i++) {                               // keep the stops in strip order (stable insertion sort)
+        for (int j = i; j > 0 && pp[j - 1] > pp[j]; j--) {
+            uint8_t t = pp[j];
+            pp[j] = pp[j - 1];
+            pp[j - 1] = t;
             for (int ch = 0; ch < 3; ch++) {
-                t = pal[j][ch];
-                pal[j][ch] = pal[j - 1][ch];
-                pal[j - 1][ch] = t;
+                t = p[j][ch];
+                p[j][ch] = p[j - 1][ch];
+                p[j - 1][ch] = t;
             }
         }
     }
 }
 
-void leds_palette_str(char *out, size_t n)
+void leds_palette_str(int sl, char *out, size_t n)
 {
+    sl = sl ? 1 : 0;
     size_t w = 0;
-    for (int i = 0; i < npal && w < n; i++) {
-        w += snprintf(out + w, n - w, "%s%02x%02x%02x@%d", i ? "," : "", pal[i][0], pal[i][1], pal[i][2], pal_pos[i]);
+    for (int i = 0; i < npal[sl] && w < n; i++) {
+        w += snprintf(out + w, n - w, "%s%02x%02x%02x@%d", i ? "," : "", pal[sl][i][0], pal[sl][i][1], pal[sl][i][2], pal_pos[sl][i]);
     }
 }
 

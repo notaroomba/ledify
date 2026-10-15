@@ -48,9 +48,9 @@ static const char *TAG = "ledify";
 #define PULSE_FLOOR 64         // brightness between beats, out of 255
 
 typedef enum { OVER_NONE, OVER_VU, OVER_PULSE } overlay_t;
-static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette"};
+static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover"};
 static const char *overlay_names[] = {"none", "vu", "pulse"};
-#define MODES "solid|rainbow|temp|spectrum|meter|palette|sound|vu|pulse|auto"
+#define MODES "solid|rainbow|temp|spectrum|meter|palette|cover|sound|vu|pulse|auto"
 
 static leds_color_t color;
 static overlay_t overlay;
@@ -220,6 +220,41 @@ static bool load_str(const char *key, char *buf, size_t n)
     return e == ESP_OK && buf[0];
 }
 
+// "ff8800@0,2244ff@35,..." into stops; positions optional but all-or-nothing. Returns the count, 0 on a bad string.
+static int parse_palette(char *arg, uint8_t stops[][3], uint8_t *pos, bool *with_pos, const char **err)
+{
+    int ns = 0, np = 0;
+    char *save;
+    for (char *h = strtok_r(arg, ",", &save); h && ns < LED_MAX_STOPS; h = strtok_r(NULL, ",", &save)) {
+        char *at = strchr(h, '@');
+        if (at) {
+            *at++ = 0;
+            int p = atoi(at);
+            if (p < 0 || p > 100) {
+                *err = "err palette: position 0-100";
+                return 0;
+            }
+            pos[ns] = p;
+            np++;
+        }
+        if (strlen(h) != 6) {
+            *err = "err palette rrggbb[@pct],rrggbb[@pct],...";
+            return 0;
+        }
+        unsigned long v = strtoul(h, NULL, 16);
+        stops[ns][0] = v >> 16;
+        stops[ns][1] = v >> 8;
+        stops[ns][2] = v;
+        ns++;
+    }
+    if (!ns || (np && np != ns)) {
+        *err = ns ? "err palette: give every stop a position, or none" : "err palette rrggbb,...";
+        return 0;
+    }
+    *with_pos = np > 0;
+    return ns;
+}
+
 static void save_segs(void)
 {
     char str[LED_MAX_SEGS * 32];
@@ -257,6 +292,17 @@ static void load_cfg(void)
         size_t sl = sizeof segs;
         if (nvs_get_str(h, "segs", segs, &sl) == ESP_OK) {
             leds_load_segments(segs);
+        }
+        char palstr[LED_MAX_STOPS * 11 + 1];
+        sl = sizeof palstr;
+        if (nvs_get_str(h, "pal", palstr, &sl) == ESP_OK) {       // the user's gradient survives a restart
+            uint8_t stops[LED_MAX_STOPS][3], pos[LED_MAX_STOPS];
+            bool wp;
+            const char *err;
+            int ns = parse_palette(palstr, stops, pos, &wp, &err);
+            if (ns) {
+                leds_set_palette(0, stops, wp ? pos : NULL, ns);
+            }
         }
         nvs_close(h);
     }
@@ -334,7 +380,7 @@ static const char *effect_name(void)
 // showing. auto is the old name for the lux modifier.
 static bool set_mode(const char *name)
 {
-    int c = lookup(name, color_names, 6);
+    int c = lookup(name, color_names, 7);
     if (c >= 0) {
         color = c;
         sound_on = false;
@@ -501,10 +547,11 @@ static void status(char *out, size_t n)
     for (int i = 0; i < pd->n_pdos; i++) {
         w += snprintf(out + w, n - w, "%s[%d,%d]", i ? "," : "", pd->pdo_mv[i], pd->pdo_ma[i]);
     }
-    char pal[LED_MAX_STOPS * 11 + 1];
-    leds_palette_str(pal, sizeof pal);
-    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu,\"palette\":\"%s\"",
-                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw(), pal);
+    char pal[LED_MAX_STOPS * 11 + 1], cov[LED_MAX_STOPS * 11 + 1];
+    leds_palette_str(0, pal, sizeof pal);
+    leds_palette_str(1, cov, sizeof cov);
+    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu,\"palette\":\"%s\",\"cover\":\"%s\"",
+                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw(), pal, cov);
     char tm[8];
     sched_time(tm, sizeof tm);
     int64_t now = esp_timer_get_time();
@@ -684,7 +731,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "mode") && n == 2) {
         reply(set_mode(tok[1]) ? mic_note() : "err mode " MODES);
     } else if (!strcmp(tok[0], "color") && n == 2) {
-        int c = lookup(tok[1], color_names, 6);
+        int c = lookup(tok[1], color_names, 7);
         if (c < 0) {
             reply("err color " LED_COLORS);
             return;
@@ -787,38 +834,23 @@ static void handle(char *line)
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
         reply("ok, see the live topic");
-    } else if (!strcmp(tok[0], "palette") && n == 2) {           // "palette ff8800@0,2244ff@35,..." up to LED_MAX_STOPS stops, position in % optional
+    } else if ((!strcmp(tok[0], "palette") || !strcmp(tok[0], "cover")) && n == 2) {   // "palette ff8800@0,2244ff@35,...": the user's gradient (saved); "cover ...": the album cover's
         uint8_t stops[LED_MAX_STOPS][3], pos[LED_MAX_STOPS];
-        int ns = 0, with_pos = 0;
-        char *save2;
-        for (char *h = strtok_r(tok[1], ",", &save2); h && ns < LED_MAX_STOPS; h = strtok_r(NULL, ",", &save2)) {
-            char *at = strchr(h, '@');
-            if (at) {
-                *at++ = 0;
-                int p = atoi(at);
-                if (p < 0 || p > 100) {
-                    reply("err palette: position 0-100");
-                    return;
-                }
-                pos[ns] = p;
-                with_pos++;
-            }
-            if (strlen(h) != 6) {
-                reply("err palette rrggbb[@pct],rrggbb[@pct],...");
-                return;
-            }
-            unsigned long v = strtoul(h, NULL, 16);
-            stops[ns][0] = v >> 16;
-            stops[ns][1] = v >> 8;
-            stops[ns][2] = v;
-            ns++;
-        }
-        if (!ns || (with_pos && with_pos != ns)) {
-            reply(ns ? "err palette: give every stop a position, or none" : "err palette rrggbb,...");
+        bool with_pos;
+        const char *err;
+        int ns = parse_palette(tok[1], stops, pos, &with_pos, &err);
+        if (!ns) {
+            reply(err);
             return;
         }
-        leds_set_palette(stops, with_pos ? pos : NULL, ns);
-        color = COLOR_PALETTE;
+        int slot = tok[0][0] == 'c';
+        leds_set_palette(slot, stops, with_pos ? pos : NULL, ns);
+        if (!slot) {
+            color = COLOR_PALETTE;                                // the user's gradient shows at once; the cover only when that effect is chosen
+            char str[LED_MAX_STOPS * 11 + 1];
+            leds_palette_str(0, str, sizeof str);
+            save_str("pal", str);
+        }
         reply("ok");
     } else if (!strcmp(tok[0], "live") && n == 2) {
         int s = atoi(tok[1]);
@@ -905,7 +937,7 @@ static void handle(char *line)
             save_segs();
             reply("ok");
         } else if (n >= 4) {
-            int c = n >= 5 ? lookup(tok[4], color_names, 6) : COLOR_SOLID;
+            int c = n >= 5 ? lookup(tok[4], color_names, 7) : COLOR_SOLID;
             uint8_t r, g, b;
             leds_get_color(&r, &g, &b);
             if (n >= 6 && strlen(tok[5]) == 6) {
@@ -928,7 +960,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
-              "volt<5|12 yes> droop<n> palette<hex[@pct],..> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
+              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
               "name<host> live<s> listen<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
