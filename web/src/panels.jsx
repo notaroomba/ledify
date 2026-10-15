@@ -114,10 +114,10 @@ const parseStops = str => (str || '').split(',').map(s => { const [c, p] = s.spl
 const sortedStops = st => [...st].sort((a, b) => a.p - b.p);
 const stopsCmd = st => sortedStops(st).map(s => s.c.slice(1).toLowerCase() + '@' + s.p).join(',');
 const stopsCss = st => 'linear-gradient(90deg, ' + sortedStops(st).map(s => s.c + ' ' + s.p + '%').join(', ') + ')';
-const stripesCss = (st, px, count) => {           // the distinct colours in turn, px pixels each, as the board draws them
+const stripesCss = (st, lens, count) => {         // the distinct colours in turn, each its own run, as the board draws them
   const cols = sortedStops(st).map(s => s.c.toLowerCase()).filter((c, i, a) => !i || c !== a[i - 1]);
-  const w = px * 100 / count;
-  return 'repeating-linear-gradient(90deg, ' + cols.map((c, i) => c + ' ' + (i * w) + '% ' + ((i + 1) * w) + '%').join(', ') + ')';
+  let at = 0;
+  return 'repeating-linear-gradient(90deg, ' + cols.map((c, i) => { const a = at, w = lens[i] * 100 / count; at += w; return c + ' ' + a + '% ' + (a + w) + '%'; }).join(', ') + ')';
 };
 const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
 const colorAt = (st, p) => {                        // the gradient's colour at p %, the same blend the board does
@@ -142,7 +142,11 @@ export function Gradient() {
   const [sel, setSel] = createSignal(0);
   const [lib, setLib] = createSignal(loadGradients());
   const [from, setFrom] = createSignal(0), [to, setTo] = createSignal(100);
-  const [stripe, setStripe] = optimistic('stripe', () => state().stripe);
+  const [stripeStr, setStripeStr] = optimistic('stripe', () => state().stripe === undefined ? undefined : String(state().stripe));
+  const lens = () => { const s = stripeStr(); return !s || s === '0' ? [] : s.split(',').map(x => Math.max(1, +x || 1)); };
+  const distinct = () => sortedStops(stops()).map(s => s.c.toLowerCase()).filter((c, i, a) => !i || c !== a[i - 1]);
+  const perColour = () => distinct().map((_, k) => lens()[k % lens().length]);
+  const setLens = l => { const str = l.length ? l.join(',') : '0'; setStripeStr(str); send('stripe ' + str); };
   let bar, nameEl;
   createEffect(() => { dev().seen; const str = state().palette; if (str && settled('palette') && stopsCmd(stops()) !== str) { setStops(parseStops(str)); setSel(0); } });
   const cur = () => stops()[Math.min(sel(), stops().length - 1)];
@@ -179,7 +183,7 @@ export function Gradient() {
   const delGradient = async name => { if (await confirmDialog('Delete gradient?', '"' + name + '" will be removed from this browser.', 'Delete')) { const l = { ...lib() }; delete l[name]; storeLib(l); } };
   return <section class="card md:col-span-2">
     <h2 class="card-title">Gradient <small>click the bar to add a stop, drag a handle to move it · {stops().length} of {MAX_STOPS}</small></h2>
-    <div ref={bar} class="relative mx-3 h-12 cursor-copy rounded-xl border border-line" style={{ background: stripe() ? stripesCss(stops(), stripe(), state().count || 300) : stopsCss(stops()) }} onPointerDown={e => { if (e.target === bar) addAt(pctAt(e)); }}>
+    <div ref={bar} class="relative mx-3 h-12 cursor-copy rounded-xl border border-line" style={{ background: lens().length ? stripesCss(stops(), perColour(), state().count || 300) : stopsCss(stops()) }} onPointerDown={e => { if (e.target === bar) addAt(pctAt(e)); }}>
       <Index each={stops()}>{(s, i) => <button type="button" class="absolute top-1/2 h-7 w-7 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none rounded-full border-2 border-white shadow-md active:cursor-grabbing" classList={{ 'ring-2 ring-accent ring-offset-2 ring-offset-surface': sel() === i }} style={{ left: s().p + '%', background: s().c }} aria-label={'stop ' + (i + 1) + ' at ' + s().p + '%'} onPointerDown={e => drag(i, e)} onKeyDown={e => keys(i, e)} />}</Index>
     </div>
     <div class="row mt-4">
@@ -189,8 +193,14 @@ export function Gradient() {
       <button type="button" class="btn btn-sm" onClick={() => update(sortedStops(stops()).map((s, i, a) => ({ ...s, p: a.length > 1 ? Math.round(i * 100 / (a.length - 1)) : 0 })), true)}>Space evenly</button>
       <button type="button" class="btn btn-sm" onClick={() => update([...stops()].reverse().map(s => ({ ...s, p: 100 - s.p })), true)}>Flip</button>
     </div>
-    <Slider rowClass="mt-3" label="Stripes" min={0} max={24} value={stripe} set={setStripe} send={v => 'stripe ' + v} fmt={v => v ? v + ' px each' : 'blend'} />
-    <p class="hint">Blend fades between the stops; stripes paint each colour of the gradient in turn, that many pixels each, repeating along the strip. Spotify's album colours live in the separate "cover" effect and never replace this gradient.</p>
+    <div class="row mt-3">
+      <span class="hint w-[92px]">Stripes</span>
+      <Chips items={[['blend', 'blend'], ['stripes', 'stripes']]} value={() => lens().length ? 'stripes' : 'blend'} onPick={v => setLens(v === 'blend' ? [] : distinct().map(() => 2))} />
+      <Show when={lens().length}>
+        <For each={distinct()}>{(c, i) => <label class="flex items-center gap-1 text-xs text-muted"><span class="inline-block h-5 w-5 rounded-full border border-line" style={{ background: c }} /><input type="number" min="1" max="100" class="field h-9 w-16" aria-label={'pixels for ' + c} value={perColour()[i()]} onChange={e => { const l = perColour(); l[i()] = Math.max(1, Math.min(100, Math.round(+e.currentTarget.value || 1))); setLens(l); }} /> px</label>}</For>
+      </Show>
+    </div>
+    <p class="hint">Blend fades between the stops; stripes paint each colour of the gradient in turn for the number of pixels set next to it, repeating along the strip. Spotify's album colours live in the separate "cover" effect and never replace this gradient.</p>
     <h2 class="card-title mt-5">Saved gradients <small>this browser</small></h2>
     <div class="row">
       <span class="hint">place one into</span>

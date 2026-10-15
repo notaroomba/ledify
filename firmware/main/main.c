@@ -153,9 +153,9 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
-static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, stripe;
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_STRIPE, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -169,7 +169,6 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"droop", &droop, 0, 100},               // tail colour fix: red cut along the strip against voltage sag, in percent
     {"tmax", &tmax, 0, 120},                 // board temperature at which the strip is fully dimmed (starts 10 lower), 0 = off
     {"fade", &fade, 0, 5000},                // transition time in ms, 0 = instant
-    {"stripe", &stripe, 0, 100},             // gradient as stripes of N pixels per colour, 0 = blend
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -256,6 +255,21 @@ static int parse_palette(char *arg, uint8_t stops[][3], uint8_t *pos, bool *with
     return ns;
 }
 
+// "4,2,2" into run lengths; "0" or anything empty means blend. Returns the count.
+static int parse_stripes(char *arg, uint8_t *len)
+{
+    int nl = 0;
+    char *save;
+    for (char *t = strtok_r(arg, ",", &save); t && nl < LED_MAX_STOPS; t = strtok_r(NULL, ",", &save)) {
+        int v = atoi(t);
+        if (v < 1 || v > 100) {
+            return 0;
+        }
+        len[nl++] = v;
+    }
+    return nl;
+}
+
 static void save_segs(void)
 {
     char str[LED_MAX_SEGS * 32];
@@ -293,6 +307,13 @@ static void load_cfg(void)
         size_t sl = sizeof segs;
         if (nvs_get_str(h, "segs", segs, &sl) == ESP_OK) {
             leds_load_segments(segs);
+        }
+        char stripestr[LED_MAX_STOPS * 4 + 1];
+        sl = sizeof stripestr;
+        if (nvs_get_str(h, "stripes", stripestr, &sl) == ESP_OK) {
+            uint8_t len[LED_MAX_STOPS];
+            int nl = parse_stripes(stripestr, len);
+            leds_set_stripes(len, nl);
         }
         char palstr[LED_MAX_STOPS * 11 + 1];
         sl = sizeof palstr;
@@ -425,7 +446,6 @@ static bool set_setting(int i, int v)
     leds_set_limit(limit);
     leds_set_droop(droop);
     leds_set_fade(fade);
-    leds_set_stripe(stripe);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -552,8 +572,10 @@ static void status(char *out, size_t n)
     char pal[LED_MAX_STOPS * 11 + 1], cov[LED_MAX_STOPS * 11 + 1];
     leds_palette_str(0, pal, sizeof pal);
     leds_palette_str(1, cov, sizeof cov);
-    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu,\"palette\":\"%s\",\"cover\":\"%s\"",
-                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw(), pal, cov);
+    char str[LED_MAX_STOPS * 4 + 1];
+    leds_stripes_str(str, sizeof str);
+    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu,\"palette\":\"%s\",\"cover\":\"%s\",\"stripe\":\"%s\"",
+                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw(), pal, cov, str);
     char tm[8];
     sched_time(tm, sizeof tm);
     int64_t now = esp_timer_get_time();
@@ -836,6 +858,18 @@ static void handle(char *line)
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
         reply("ok, see the live topic");
+    } else if (!strcmp(tok[0], "stripe") && n == 2) {             // stripe 0 | N | N,N,...: pixels per gradient colour, cycling
+        uint8_t len[LED_MAX_STOPS];
+        int nl = strcmp(tok[1], "0") ? parse_stripes(tok[1], len) : 0;
+        if (!nl && strcmp(tok[1], "0")) {
+            reply("err stripe 0 | px | px,px,... (1-100 each)");
+            return;
+        }
+        leds_set_stripes(len, nl);
+        char str[LED_MAX_STOPS * 4 + 1];
+        leds_stripes_str(str, sizeof str);
+        save_str("stripes", str);
+        reply("ok");
     } else if ((!strcmp(tok[0], "palette") || !strcmp(tok[0], "cover")) && n == 2) {   // "palette ff8800@0,2244ff@35,...": the user's gradient (saved); "cover ...": the album cover's
         uint8_t stops[LED_MAX_STOPS][3], pos[LED_MAX_STOPS];
         bool with_pos;
@@ -962,7 +996,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
-              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<px> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
+              "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
               "name<host> live<s> listen<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
@@ -998,7 +1032,6 @@ void app_main(void)
     leds_set_limit(limit);
     leds_set_droop(droop);
     leds_set_fade(fade);
-    leds_set_stripe(stripe);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);

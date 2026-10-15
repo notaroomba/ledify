@@ -5,7 +5,7 @@ import { ingest, hooks, setUi } from './store';
 const st = {
   fw: 'demo', power: 1, volt: 5, mode: 'solid', color: 'solid', bright: 'level', overlay: 'none', auto: 0, level: 160, count: 300,
   type: 'ws2812', cap: 160, gain: 25, lux_lo: 0, lux_hi: 500, night: 0, temp_lo: 15, temp_hi: 30, limit: 0, pdmax: 20000,
-  pddelay: 100, droop: 0, tmax: 70, fade: 300, stripe: 0, cover: 'ffffff@0', pd: { attached: 1, ready: 1, mv: 20000, ma: 3000 }, net: 'demo board, nothing is wired',
+  pddelay: 100, droop: 0, tmax: 70, fade: 300, stripe: '0', cover: 'ffffff@0', pd: { attached: 1, ready: 1, mv: 20000, ma: 3000 }, net: 'demo board, nothing is wired',
   pdos: [[5000, 3000], [9000, 3000], [15000, 3000], [20000, 3000]], need_mw: 15000, budget_mw: 51000,
   palette: 'ff3c00@0,ff8c00@35,ff0066@70,4b0082@100', time: '', tz: 'UTC0', name: 'ledify', ip: '', clients: 0, hot: 0,
   board_c: 31.2, sleep: 0, rise: 0, sched: [], segs: [], stream: null, boots: 1, rst: 'poweron', boot_log: [],
@@ -38,6 +38,7 @@ function run(cmd) {
   } else if (k === 'sleep') { st.sleep = +t[1] * 60; if (st.sleep) st.power = 1; }
   else if (k === 'rise') { st.rise = +t[1] * 60; st.power = 1; }
   else if (k === 'tz') st.tz = t[1];
+  else if (k === 'stripe') st.stripe = t[1];
   else if (k === 'name') st.name = t[1];
   else if (k === 'volt' && t[1] === '12' && t[2] !== 'yes') reply = '12 V destroys 5 V strips. If the strip really is 12 V send: volt 12 yes';
   else if (k === 'volt') st.volt = +t[1];

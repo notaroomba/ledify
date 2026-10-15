@@ -35,7 +35,9 @@ static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour s
 static uint8_t pal[2][LED_MAX_STOPS][3] = {{{255, 255, 255}}, {{255, 255, 255}}};   // gradient stops per slot (user, cover), in strip order
 static uint8_t pal_pos[2][LED_MAX_STOPS];                 // and their position in %
 static int npal[2] = {1, 1};
-static uint8_t stripe;                                    // stripes of this many pixels per stop colour, 0 = blend
+static uint8_t stripes[LED_MAX_STOPS];                   // stripes: pixels per distinct stop colour, cycling; none = blend
+static int nstripes;
+static leds_color_t last_src = COLOR_SOLID;               // what the previous frame showed, for the colour easing rule
 static uint8_t droop;                                     // tail colour fix in %, see leds_frame()
 static uint16_t fade_ms = FADE_MS;
 static uint8_t shown[MAX_LEDS][3];                        // what is on the strip now (before brightness), eased towards fb
@@ -240,14 +242,20 @@ static void render(leds_color_t c, int i, int n, uint8_t r, uint8_t g, uint8_t b
     case COLOR_PALETTE:
     case COLOR_COVER: {                                         // blend between the two stops around this pixel, 8.8 fixed point
         int sl = c == COLOR_COVER, np = npal[sl];
-        if (stripe) {                                           // stripes: the distinct stop colours in turn, stripe pixels each
-            int idx[LED_MAX_STOPS], nd = 0;
+        if (nstripes) {                                         // stripes: the distinct stop colours in turn, each its own run length
+            int idx[LED_MAX_STOPS], nd = 0, period = 0;
             for (int k = 0; k < np; k++) {
                 if (!k || memcmp(pal[sl][k], pal[sl][k - 1], 3)) {
+                    period += stripes[nd % nstripes];
                     idx[nd++] = k;
                 }
             }
-            const uint8_t *q = pal[sl][idx[(i / stripe) % nd]];
+            int pos = i % period, k = 0;
+            while (pos >= stripes[k % nstripes]) {
+                pos -= stripes[k % nstripes];
+                k++;
+            }
+            const uint8_t *q = pal[sl][idx[k]];
             p[0] = q[0]; p[1] = q[1]; p[2] = q[2];
             break;
         }
@@ -347,6 +355,8 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
     }
     settled = true;
     shown_lvl = ease(shown_lvl, use, alpha);
+    uint32_t calpha = c == COLOR_SOLID && last_src == COLOR_SOLID && !segs_on() ? alpha : 256;   // colours only cross-fade solid to solid
+    last_src = c;
 
     // A strip fed from one end sags towards the far end, where blue and green drop out of regulation before red, so
     // white turns warm along the strip. droop cuts red (and half as much green) with a parabolic profile, scaled
@@ -355,7 +365,7 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
     uint32_t load = droop ? (sum / 255 * shown_lvl / 255) * 256 / ((uint32_t)count * (LED_RED_MW + LED_GREEN_MW + LED_BLUE_MW)) : 0;   // 0..256 of full white
     for (int i = 0; i < count; i++) {
         for (int ch = 0; ch < 3; ch++) {
-            shown[i][ch] = ease(shown[i][ch], fb[i][ch], alpha);
+            shown[i][ch] = ease(shown[i][ch], fb[i][ch], calpha);
         }
         uint32_t r = shown[i][0] * shown_lvl / 255, g = shown[i][1] * shown_lvl / 255, b = shown[i][2] * shown_lvl / 255;
         if (load) {
@@ -409,9 +419,34 @@ void leds_set_palette(int sl, const uint8_t (*stops)[3], const uint8_t *pos, int
     }
 }
 
-void leds_set_stripe(uint8_t px)
+void leds_set_stripes(const uint8_t *len, int n)
 {
-    stripe = px;
+    nstripes = n < 0 ? 0 : n > LED_MAX_STOPS ? LED_MAX_STOPS : n;
+    for (int i = 0; i < nstripes; i++) {
+        stripes[i] = len[i] ? len[i] : 1;
+    }
+}
+
+void leds_stripes_str(char *out, size_t n)
+{
+    size_t w = 0;
+    if (!nstripes) {
+        snprintf(out, n, "0");
+        return;
+    }
+    for (int i = 0; i < nstripes && w < n; i++) {
+        w += snprintf(out + w, n - w, "%s%d", i ? "," : "", stripes[i]);
+    }
+}
+
+static bool segs_on(void)
+{
+    for (int k = 0; k < LED_MAX_SEGS; k++) {
+        if (segs[k].on) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void leds_palette_str(int sl, char *out, size_t n)

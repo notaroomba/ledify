@@ -61,7 +61,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `droop N` | Tail colour fix, 0-100 (saved, default 0). A strip fed from one end sags towards the far end, where blue and green dim before red, so white turns warm along the strip. `droop` cuts red (and half as much green) progressively along the strip, scaled by how much of a full-white load the frame draws; set it so the far end looks white at your usual brightness. The real fix is feeding 5 V (and ground) into the far end of the strip as well |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `palette hex[@pct],...` | Up to 16 colour stops as a gradient along the strip, each with an optional position in percent (`ff8800@0,2244ff@35,ffffff@100`; without positions they are spread evenly, and the stops are sorted by position). Also selects the `palette` colour source; `status` reports the stops as `palette`. Saved. The panel's gradient editor uses this |
-| `stripe N` | Show the gradient as stripes instead of a blend: each distinct stop colour in turn, N pixels each, repeating along the strip (0 = blend, the default). Saved |
+| `stripe N` / `stripe N,N,...` | Show the gradient as stripes instead of a blend: each distinct stop colour in turn, N pixels each, or one length per colour (`stripe 4,2,2`), repeating along the strip; `stripe 0` blends again. Saved |
 | `cover hex[@pct],...` | The same, into a second gradient shown by the `cover` colour source, so the album-cover colours the panel sends from Spotify never replace your own gradient; `status` reports it as `cover` |
 | `seg N START END [color [rrggbb]]` | Zone N (1-6) covers pixels START to END-1 with its own colour source (`solid`, `rainbow`, `temp`, `spectrum`, `meter`, `palette`) and solid colour; pixels outside every zone keep the strip's. `seg` lists them, `seg del N` and `seg off` remove. Saved |
 | `sleep N` | Fade out over N minutes, then off; `sleep 0` cancels. `status` shows the seconds left as `sleep` |
@@ -132,9 +132,11 @@ A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a lapt
 
 ## Timers, zones, local control
 
-**Transitions.** Every change eases in: the frame on the strip moves towards the new one by a share of the remaining
-distance each redraw, so a change settles in about `fade` ms whatever the frame rate, and `off` fades to dark before
-the rail is cut. Sound-reactive styles and LAN streams draw instantly. The BOOT button on the board toggles the
+**Transitions.** Brightness changes ease in, and so does a change from one solid colour to another: the frame on the
+strip moves towards the new one by a share of the remaining distance each redraw, so a change settles in about
+`fade` ms whatever the frame rate, and `off` fades to dark before the rail is cut. Gradients, stripes, zones and the
+moving styles switch at once (a cross-fade between two stripe layouts shows muddled in-between colours), and
+sound-reactive styles and LAN streams always draw instantly. The BOOT button on the board toggles the
 output with a short press.
 
 **Sleep and sunrise.** `sleep N` scales the brightness linearly to zero over N minutes and turns the output off;

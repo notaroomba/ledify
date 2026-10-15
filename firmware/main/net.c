@@ -177,7 +177,6 @@ static void discover(void)
         {"droop", "tail colour fix", "%", "mdi:resistor", "slider", 0, 100},
         {"tmax", "thermal limit", "°C", "mdi:thermometer-alert", "slider", 0, 120},
         {"fade", "transition", "ms", "mdi:transition", "slider", 0, 5000},
-        {"stripe", "stripes", "px", "mdi:view-column", "slider", 0, 100},
     };
     for (int i = 0; i < sizeof nums / sizeof nums[0]; i++) {
         snprintf(topic, sizeof topic, "homeassistant/number/%s_%s/config", id, nums[i].key);
