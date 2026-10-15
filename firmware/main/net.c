@@ -29,6 +29,9 @@
 #include "nvs.h"
 #include "cmd.h"
 #include "board.h"
+#include "sched.h"
+#include "stream.h"
+#include "web.h"
 
 static const char *TAG = "net";
 static QueueHandle_t cmd_q;
@@ -172,6 +175,8 @@ static void discover(void)
         {"temp_lo", "temp low", "°C", "mdi:snowflake", "slider", -40, 100},
         {"temp_hi", "temp high", "°C", "mdi:fire", "slider", -40, 100},
         {"droop", "tail colour fix", "%", "mdi:resistor", "slider", 0, 100},
+        {"tmax", "thermal limit", "°C", "mdi:thermometer-alert", "slider", 0, 120},
+        {"fade", "transition", "ms", "mdi:transition", "slider", 0, 5000},
     };
     for (int i = 0; i < sizeof nums / sizeof nums[0]; i++) {
         snprintf(topic, sizeof topic, "homeassistant/number/%s_%s/config", id, nums[i].key);
@@ -284,6 +289,9 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t event_id, void 
         fails = 0;
         ESP_LOGI(TAG, "wifi connected, ip %s", ip);
         mqtt_start();
+        sched_on_ip();
+        stream_on_ip();
+        web_on_ip();
     }
 }
 
@@ -337,6 +345,11 @@ bool net_mqtt_connected(void)
     return mqtt_up;
 }
 
+const char *net_ip(void)
+{
+    return wifi_up ? ip : "";
+}
+
 void net_status(char *out, size_t n)
 {
     if (!ssid[0]) {
@@ -379,6 +392,9 @@ static void audio_task(void *arg)
         if (n && mqtt_up) {
             esp_mqtt_client_publish(mqtt, t_audio, (const char *)buf, n, 0, 0);
         }
+        if (n) {
+            web_publish_audio(buf, n);
+        }
     }
 }
 
@@ -388,7 +404,7 @@ void net_publish_audio(const void *pcm, int len)
         audio_sb = xStreamBufferCreate(8192, 1024);                 // a quarter second of audio
         xTaskCreate(audio_task, "audio", 4096, NULL, 3, NULL);
     }
-    if (mqtt_up) {
+    if (mqtt_up || web_clients()) {
         xStreamBufferSend(audio_sb, pcm, len, 0);                   // drops the chunk if Wi-Fi is behind
     }
 }

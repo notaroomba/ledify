@@ -38,6 +38,9 @@
 #include "net.h"
 #include "ota.h"
 #include "esp_app_desc.h"
+#include "sched.h"
+#include "stream.h"
+#include "web.h"
 
 static const char *TAG = "ledify";
 
@@ -137,6 +140,11 @@ static void save_pd_step(int phase)
 static bool power;
 static int volt = 5;
 static bool have_mic;
+static int64_t sleep_end, sleep_total, rise_end, rise_total;   // sleep: fade out, then off; rise: up from dark over minutes
+static bool off_pending;                    // "off" fades first; the rail goes off once the strip is dark
+static int hot_scale = 255;                 // brightness left by the thermal limit, 0..255
+static float board_c = -100;                // latest board temperature
+static int64_t restart_at;                  // a saved network setting restarts the board shortly after
 static QueueHandle_t cmd_q;
 
 // Saved tunables. The key is the command, the Home Assistant topic ledify/<id>/<key>/set and the status field.
@@ -145,8 +153,9 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -158,6 +167,8 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"pdmax", &pdmax, 5000, 20000},          // highest PD voltage to request, in mV
     {"pddelay", &pddelay, 0, 30000},         // ms after boot before the board talks PD (experiments with picky chargers)
     {"droop", &droop, 0, 100},               // tail colour fix: red cut along the strip against voltage sag, in percent
+    {"tmax", &tmax, 0, 120},                 // board temperature at which the strip is fully dimmed (starts 10 lower), 0 = off
+    {"fade", &fade, 0, 5000},                // transition time in ms, 0 = instant
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -180,6 +191,40 @@ static void save_type(const char *t)
         nvs_commit(h);
         nvs_close(h);
     }
+}
+
+static bool save_str(const char *key, const char *val)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+    esp_err_t e = nvs_set_str(h, key, val);
+    if (e == ESP_OK) {
+        e = nvs_commit(h);
+    }
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+static bool load_str(const char *key, char *buf, size_t n)
+{
+    nvs_handle_t h;
+    buf[0] = 0;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    size_t len = n;
+    esp_err_t e = nvs_get_str(h, key, buf, &len);
+    nvs_close(h);
+    return e == ESP_OK && buf[0];
+}
+
+static void save_segs(void)
+{
+    char str[LED_MAX_SEGS * 32];
+    leds_segments_str(str, sizeof str);
+    save_str("segs", str);
 }
 
 static void save_i16(const char *key, int16_t v)
@@ -207,6 +252,11 @@ static void load_cfg(void)
         }
         for (int i = 0; i < N_SETTINGS; i++) {
             nvs_get_i16(h, settings[i].key, settings[i].val);
+        }
+        char segs[LED_MAX_SEGS * 32];
+        size_t sl = sizeof segs;
+        if (nvs_get_str(h, "segs", segs, &sl) == ESP_OK) {
+            leds_load_segments(segs);
         }
         nvs_close(h);
     }
@@ -251,6 +301,7 @@ static void reply(const char *s)
     ESP_LOGI(TAG, "> %s", s);
     ble_send(s);
     net_publish_reply(s);
+    web_publish_reply(s);
 }
 
 static int lookup(const char *name, const char *const *names, int n)
@@ -326,6 +377,7 @@ static bool set_setting(int i, int v)
     mic_set_gain(gain);
     leds_set_limit(limit);
     leds_set_droop(droop);
+    leds_set_fade(fade);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -359,12 +411,38 @@ static void sense(void)
     float t = have_temp_in ? temp_in : d.have_baro ? d.temp_c : (temp_lo + temp_hi) / 2.0f;
     int pos = temp_hi > temp_lo ? (int)((t - temp_lo) * 255 / (temp_hi - temp_lo)) : 128;
     leds_set_temp(pos < 0 ? 0 : pos > 255 ? 255 : pos);
+    // Thermal limit: the barometer sits on the board next to the buck. Full brightness up to tmax - 10, nothing at tmax.
+    board_c = d.have_baro ? d.temp_c : -100;
+    hot_scale = 255;
+    if (tmax > 0 && d.have_baro && d.temp_c > tmax - 10) {
+        float f = (tmax - d.temp_c) / 10.0f;
+        hot_scale = f <= 0 ? 0 : (int)(f * 255);
+    }
+}
+
+// Power the rail, or fade the strip out first and let the loop cut the rail once it is dark.
+static void set_power(bool on)
+{
+    if (on) {
+        power = true;
+        off_pending = false;
+        leds_power(true);
+    } else {
+        power = false;
+        sleep_end = 0;
+        rise_end = 0;
+        if (fade) {
+            off_pending = true;
+        } else {
+            leds_power(false);
+        }
+    }
 }
 
 // Compose and send one frame.
 static void frame(void)
 {
-    if (!power) {
+    if (!power && !off_pending) {
         return;
     }
     uint8_t bands[3];
@@ -379,14 +457,28 @@ static void frame(void)
     if (overlay == OVER_PULSE) {
         lvl = lvl * (PULSE_FLOOR + (255 - PULSE_FLOOR) * mic_pulse() / 255) / 255;
     }
+    int64_t now = esp_timer_get_time();
+    if (sleep_end) {                                             // sleep timer: linear fade to dark
+        int64_t left = sleep_end - now;
+        lvl = left > 0 ? (int)(lvl * left / sleep_total) : 0;
+    }
+    if (rise_end) {                                              // sunrise: linear fade up from dark
+        int64_t left = rise_end - now;
+        lvl = left > 0 ? (int)(lvl * (rise_total - left) / rise_total) : lvl;
+    }
+    lvl = lvl * hot_scale / 255;
+    if (off_pending) {
+        lvl = 0;
+    }
     int count = leds_get_count();
-    leds_frame(color, lvl, overlay == OVER_VU ? count * mic_loud() / 255 : count, bands);
+    leds_color_t c = leds_stream_active() ? COLOR_STREAM : color;
+    leds_frame(c, lvl, overlay == OVER_VU ? count * mic_loud() / 255 : count, bands, uses_mic() || c == COLOR_STREAM);
 }
 
 // Styles that move redraw every FRAME_MS; a still frame only needs the once-a-second resend.
 static bool live(void)
 {
-    return color == COLOR_RAINBOW || uses_mic();
+    return leds_animated(color) || uses_mic() || !leds_settled() || sleep_end || rise_end;
 }
 
 static void status(char *out, size_t n)
@@ -413,6 +505,17 @@ static void status(char *out, size_t n)
     leds_palette_str(pal, sizeof pal);
     w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu,\"palette\":\"%s\"",
                   (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw(), pal);
+    char tm[8];
+    sched_time(tm, sizeof tm);
+    int64_t now = esp_timer_get_time();
+    w += snprintf(out + w, n - w, ",\"time\":\"%s\",\"tz\":\"%s\",\"name\":\"%s\",\"ip\":\"%s\",\"clients\":%d,\"hot\":%d,\"board_c\":%.1f,\"sleep\":%ld,\"rise\":%ld,\"sched\":",
+                  tm, sched_tz(), web_name(), net_ip(), web_clients(), 100 - hot_scale * 100 / 255, board_c,
+                  (long)(sleep_end > now ? (sleep_end - now) / 1000000 : 0), (long)(rise_end > now ? (rise_end - now) / 1000000 : 0));
+    w += sched_json(out + w, n - w);
+    w += snprintf(out + w, n - w, ",\"segs\":");
+    w += leds_segments_json(out + w, n - w);
+    w += snprintf(out + w, n - w, ",\"stream\":");
+    w += stream_json(out + w, n - w);
     w += snprintf(out + w, n - w, ",\"boots\":%lu,\"rst\":\"%s\",\"pdmax\":%d,\"boot_log\":[\"%s\",\"%s\",\"%s\",\"%s\"]",
                   (unsigned long)boots, reset_name(), pd_get_max_mv(), boot_log[0], boot_log[1], boot_log[2], boot_log[3]);
     if (d.have_lux) {
@@ -437,10 +540,10 @@ static void status(char *out, size_t n)
 // Push the current state to MQTT (no-op until the broker is connected).
 static void publish(void)
 {
-    if (!net_mqtt_connected()) {
+    if (!net_mqtt_connected() && !web_clients()) {
         return;
     }
-    static char light[160], st[768], sens[160];
+    static char light[160], st[2560], sens[160];
     uint8_t r, g, b;
     leds_get_color(&r, &g, &b);
     snprintf(light, sizeof light,
@@ -452,6 +555,7 @@ static void publish(void)
     snprintf(sens, sizeof sens, "{\"lux\":%.1f,\"temp_c\":%.2f,\"pressure_kpa\":%.2f,\"sound_db\":%.1f}",
              d.lux, d.temp_c, d.pressure_pa / 1000.0f, have_mic ? mic_db() : 0.0f);
     net_publish(light, st, sens);
+    web_publish(light, st, sens);
 }
 
 // Home Assistant JSON light schema: {"state":"ON","brightness":128,"color":{"r":..},"effect":"rainbow"}
@@ -501,8 +605,7 @@ static void handle_json(const char *text)
         leds_set_level(v < 0 ? 0 : v > 255 ? 255 : v);
     }
     if (json_str(text, "state", str, sizeof str)) {
-        power = !strcasecmp(str, "ON");
-        leds_power(power);
+        set_power(!strcasecmp(str, "ON"));
     }
 }
 
@@ -527,22 +630,22 @@ static void handle(char *line)
     for (char *p = tok[0]; *p; p++) {
         *p = tolower((unsigned char)*p);
     }
-    bool keep_case = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "wifi2") || !strcmp(tok[0], "mqtt") || !strcmp(tok[0], "ota");   // credentials are case sensitive
+    bool keep_case = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "wifi2") || !strcmp(tok[0], "mqtt") || !strcmp(tok[0], "ota")   // credentials, URLs and
+                     || !strcmp(tok[0], "tz") || !strcmp(tok[0], "sched") || !strcmp(tok[0], "name") || !strcmp(tok[0], "otabase");   // TZ rules are case sensitive
     for (int i = 1; i < n && !keep_case; i++) {
         for (char *p = tok[i]; *p; p++) {
             *p = tolower((unsigned char)*p);
         }
     }
-    static char out[1280];                  // status JSON: about 950 bytes with 16 palette stops
+    static char out[2560];                  // status JSON: about 1.5 KB with every list filled
     int s = setting_idx(tok[0]);
 
     if (!strcmp(tok[0], "on") && n == 1) {
-        power = true;
-        leds_power(true);
+        sleep_end = 0;
+        set_power(true);
         reply("ok");
     } else if (!strcmp(tok[0], "off") && n == 1) {
-        power = false;
-        leds_power(false);
+        set_power(false);
         reply("ok");
     } else if (!strcmp(tok[0], "rgb") && n == 4) {
         int r = atoi(tok[1]), g = atoi(tok[2]), b = atoi(tok[3]);
@@ -675,8 +778,7 @@ static void handle(char *line)
         reply(out);
     } else if (!strcmp(tok[0], "wifi") && n == 3) {
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
+        restart_at = esp_timer_get_time() + 2000000;      // in two seconds: more settings may follow (the panel's setup sends several)
     } else if (!strcmp(tok[0], "listen") && n == 2) {              // stream the mic to the panel
         int s = atoi(tok[1]);
         mic_listen(s < 0 ? 0 : s > 300 ? 300 : s);
@@ -726,19 +828,108 @@ static void handle(char *line)
         uint8_t b[3] = {atoi(tok[2]), atoi(tok[3]), atoi(tok[4])};
         mic_feed(atoi(tok[1]), b, atoi(tok[5]));
     } else if (!strcmp(tok[0], "ota") && n == 2) {
+        char base[96];
+        if (load_str("ota_base", base, sizeof base) && strncmp(tok[1], base, strlen(base))) {   // "otabase URL" pins where images may come from
+            reply("err ota: the url must start with the saved otabase");
+            return;
+        }
         reply(ota_start(tok[1]) ? "ok, downloading; the board restarts when done" : "err ota busy or bad url");
     } else if (!strcmp(tok[0], "wifi2") && (n == 2 || n == 3)) {   // "wifi2 off" clears the fallback
         reply(net_save_wifi2(n == 3 ? tok[1] : "", n == 3 ? tok[2] : "") ? "ok, restarting" : "err nvs");
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
+        restart_at = esp_timer_get_time() + 2000000;      // in two seconds: more settings may follow (the panel's setup sends several)
     } else if (!strcmp(tok[0], "mqtt") && (n == 2 || n == 4)) {
         reply(net_save_mqtt(tok[1], n == 4 ? tok[2] : NULL, n == 4 ? tok[3] : NULL) ? "ok, restarting" : "err nvs");
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
+        restart_at = esp_timer_get_time() + 2000000;      // in two seconds: more settings may follow (the panel's setup sends several)
+    } else if (!strcmp(tok[0], "sleep") && n == 2) {              // fade out over N minutes, then off; 0 cancels
+        int m = atoi(tok[1]);
+        if (m < 0 || m > 720) {
+            reply("err sleep 0-720 minutes");
+            return;
+        }
+        if (!m) {
+            sleep_end = 0;
+            reply("ok, sleep cancelled");
+            return;
+        }
+        if (!power) {
+            set_power(true);
+        }
+        rise_end = 0;
+        sleep_total = m * 60000000LL;
+        sleep_end = esp_timer_get_time() + sleep_total;
+        reply("ok");
+    } else if (!strcmp(tok[0], "rise") && n == 2) {               // from dark up to the set level over N minutes
+        int m = atoi(tok[1]);
+        if (m < 1 || m > 720) {
+            reply("err rise 1-720 minutes");
+            return;
+        }
+        sleep_end = 0;
+        rise_total = m * 60000000LL;
+        rise_end = esp_timer_get_time() + rise_total;
+        set_power(true);
+        reply("ok");
+    } else if (!strcmp(tok[0], "tz") && n == 2) {                 // POSIX rule, e.g. EST5EDT,M3.2.0,M11.1.0
+        reply(sched_set_tz(tok[1]) ? "ok" : "err tz: a POSIX TZ string");
+    } else if (!strcmp(tok[0], "sched")) {                        // sched | sched add HH:MM command | sched del N | sched clear
+        if (n == 1) {
+            sched_json(out, sizeof out);
+            reply(out);
+        } else if (!strcmp(tok[1], "add") && n >= 4) {
+            char line[64] = "";
+            for (int i = 3; i < n; i++) {
+                strlcat(line, tok[i], sizeof line);
+                if (i + 1 < n) {
+                    strlcat(line, " ", sizeof line);
+                }
+            }
+            reply(sched_add(tok[2], line) ? "ok" : "err sched add HH:MM command (8 entries, 47 chars)");
+        } else if (!strcmp(tok[1], "del") && n == 3) {
+            reply(sched_del(atoi(tok[2])) ? "ok" : "err sched del N");
+        } else if (!strcmp(tok[1], "clear")) {
+            sched_clear();
+            reply("ok");
+        } else {
+            reply("err sched add HH:MM command | del N | clear");
+        }
+    } else if (!strcmp(tok[0], "seg")) {                          // seg | seg N START END [color [rrggbb]] | seg del N | seg off
+        if (n == 1) {
+            leds_segments_json(out, sizeof out);
+            reply(out);
+        } else if (!strcmp(tok[1], "off") || !strcmp(tok[1], "clear")) {
+            leds_clear_segments();
+            save_segs();
+            reply("ok");
+        } else if (!strcmp(tok[1], "del") && n == 3) {
+            leds_clear_segment(atoi(tok[2]) - 1);
+            save_segs();
+            reply("ok");
+        } else if (n >= 4) {
+            int c = n >= 5 ? lookup(tok[4], color_names, 6) : COLOR_SOLID;
+            uint8_t r, g, b;
+            leds_get_color(&r, &g, &b);
+            if (n >= 6 && strlen(tok[5]) == 6) {
+                unsigned long v = strtoul(tok[5], NULL, 16);
+                r = v >> 16; g = v >> 8; b = v;
+            }
+            if (c < 0 || !leds_set_segment(atoi(tok[1]) - 1, atoi(tok[2]), atoi(tok[3]), c, r, g, b)) {
+                reply("err seg N(1-6) START END [" LED_COLORS " [rrggbb]], END after START");
+                return;
+            }
+            save_segs();
+            reply("ok");
+        } else {
+            reply("err seg N START END [color [rrggbb]] | del N | off");
+        }
+    } else if (!strcmp(tok[0], "name") && n == 2) {               // mDNS hostname: http://NAME.local
+        reply(web_set_name(tok[1]) ? "ok" : "err name: letters, digits and dashes");
+    } else if (!strcmp(tok[0], "otabase") && n == 2) {            // only accept OTA images from under this URL ("any" clears)
+        reply(save_str("ota_base", strcmp(tok[1], "any") ? tok[1] : "") ? "ok" : "err nvs");
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
-              "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12 yes> droop<n> palette<hex[@pct],..> live<s> listen<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
+              "volt<5|12 yes> droop<n> palette<hex[@pct],..> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
+              "name<host> live<s> listen<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -772,6 +963,7 @@ void app_main(void)
     load_cfg();
     leds_set_limit(limit);
     leds_set_droop(droop);
+    leds_set_fade(fade);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);
@@ -786,13 +978,18 @@ void app_main(void)
     xTaskCreate(console_task, "console", 3072, NULL, 3, NULL);
     ble_init(cmd_q);
     net_init(cmd_q);
+    sched_init();
+    stream_init();
+    web_init(cmd_q);
+    gpio_config_t btn = { .pin_bit_mask = 1ULL << PIN_BUTTON, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE };
+    gpio_config(&btn);
 
-    static char snap[768];
+    static char snap[2560];
     status(snap, sizeof snap);               // one snapshot in the log so sensors can be checked without BLE
     ESP_LOGI(TAG, "%s", snap);
 
-    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0, last_live = 0, pub_due = 0;
-    bool image_ok = false;
+    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0, last_live = 0, pub_due = 0, btn_down = 0;
+    bool image_ok = false, btn_was = false;
     uint32_t frame_max_us = 0, frames = 0;
     cmd_t cmd;
     for (;;) {
@@ -806,6 +1003,41 @@ void app_main(void)
             }
         }
         int64_t now = esp_timer_get_time();
+        const char *due = sched_due();                          // schedules run as if typed
+        if (due) {
+            cmd_t c = {0};
+            strlcpy(c.text, due, sizeof c.text);
+            xQueueSend(cmd_q, &c, 0);
+        }
+        bool btn = !gpio_get_level(PIN_BUTTON);                  // a short press toggles the output
+        if (btn && !btn_was) {
+            btn_down = now;
+        } else if (!btn && btn_was && now - btn_down > 40000 && now - btn_down < 1000000) {
+            set_power(!power);
+            frame();
+            pub_due = now + 150000;
+        }
+        btn_was = btn;
+        if (sleep_end && now >= sleep_end) {
+            sleep_end = 0;
+            set_power(false);
+            pub_due = now + 150000;
+        }
+        if (rise_end && now >= rise_end) {
+            rise_end = 0;
+            pub_due = now + 150000;
+        }
+        if (off_pending && leds_settled()) {                    // the fade-out is done: cut the rail
+            off_pending = false;
+            leds_power(false);
+        }
+        if (restart_at && now > restart_at) {
+            esp_restart();
+        }
+        if (power && stream_take_frame()) {                     // a LAN frame arrived: show it right away
+            frame();
+            last_frame = now;
+        }
         if (now - last_sense > 500000) {
             sense();
             last_sense = now;
@@ -857,6 +1089,7 @@ void app_main(void)
             snprintf(live, sizeof live, "{\"loud\":%d,\"bands\":[%d,%d,%d],\"pulse\":%d,\"db\":%.0f,\"cap\":%d}",
                      have_mic ? mic_loud() : 0, b[0], b[1], b[2], have_mic ? mic_pulse() : 0, have_mic ? mic_db() : 0.0f, leds_get_cap());
             net_publish_live(live);
+            web_publish_live(live);
             last_live = now;
         }
         if (pub_due && now >= pub_due) {
@@ -868,7 +1101,7 @@ void app_main(void)
             publish();
             last_pub = now;
         }
-        if (power && now - last_frame > (live() ? FRAME_MS * 1000 : 1000000)) {
+        if ((power || off_pending) && now - last_frame > (live() ? FRAME_MS * 1000 : 1000000)) {
             frame();                                    // pixels only latch while powered, so still frames go out again once a second
             uint32_t us = esp_timer_get_time() - now;
             if (us > frame_max_us) {

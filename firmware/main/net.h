@@ -11,6 +11,7 @@ bool net_save_wifi2(const char *ssid, const char *pass);   // fallback network, 
 bool net_save_mqtt(const char *url, const char *user, const char *pass);
 void net_status(char *out, size_t n);        // short human-readable line
 bool net_mqtt_connected(void);
+const char *net_ip(void);                    // "" until connected
 // Publish state. light_json follows Home Assistant's JSON light schema; status_json is the
 // full status() output; sensors_json carries the readings used by the discovered sensors.
 void net_publish(const char *light_json, const char *status_json, const char *sensors_json);

@@ -49,7 +49,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `temp LO HI` | °C shown as blue and as red by the `temp` colour, white halfway, default `15 30`. Saved; also `temp_lo N` / `temp_hi N` |
 | `temp 21.5` | Feed a temperature in; the `temp` colour uses it instead of the barometer until the next restart |
 | `volt 5` / `volt 12 yes` | Select the output voltage. 12 V must be confirmed with `yes` because it destroys 5 V pixels; it needs a charger offering 15 V or more (the board renegotiates for it) and the output turns off first |
-| `status` | JSON with power state, strip settings, colour/brightness/overlay, the saved tunables, the brightness cap, PD contract, network state, lux, temperature, pressure, accel, gyro, sound level and loudness after gain |
+| `status` | JSON with power state, strip settings, colour/brightness/overlay, the saved tunables, the brightness cap, PD contract, network state, board time, `sleep`/`rise` seconds left, `hot` (percent removed by the thermal limit), the schedule, zones, an active LAN stream, lux, temperature, pressure, accel, gyro, sound level and loudness after gain |
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
@@ -61,6 +61,15 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `droop N` | Tail colour fix, 0-100 (saved, default 0). A strip fed from one end sags towards the far end, where blue and green dim before red, so white turns warm along the strip. `droop` cuts red (and half as much green) progressively along the strip, scaled by how much of a full-white load the frame draws; set it so the far end looks white at your usual brightness. The real fix is feeding 5 V (and ground) into the far end of the strip as well |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `palette hex[@pct],...` | Up to 16 colour stops as a gradient along the strip, each with an optional position in percent (`ff8800@0,2244ff@35,ffffff@100`; without positions they are spread evenly, and the stops are sorted by position). Also selects the `palette` colour source; `status` reports the stops as `palette`. The panel's gradient editor and the album-cover colours use this |
+| `seg N START END [color [rrggbb]]` | Zone N (1-6) covers pixels START to END-1 with its own colour source (`solid`, `rainbow`, `temp`, `spectrum`, `meter`, `palette`) and solid colour; pixels outside every zone keep the strip's. `seg` lists them, `seg del N` and `seg off` remove. Saved |
+| `sleep N` | Fade out over N minutes, then off; `sleep 0` cancels. `status` shows the seconds left as `sleep` |
+| `rise N` | Sunrise: on, and from dark up to the set level over N minutes (`rise` in `status`) |
+| `tz RULE` | Timezone as a POSIX rule, e.g. `EST5EDT,M3.2.0,M11.1.0` (the panel has a list). Saved; the clock itself comes from the internet once Wi-Fi is up |
+| `sched add HH:MM CMD` | Run any command every day at that time on the board's clock, up to 8 entries; `sched` lists them, `sched del N` and `sched clear` remove. Saved |
+| `fade MS` | Transition time: colour and brightness changes ease over about this long, default 300, 0 = instant. Saved. Sound-reactive styles and LAN streams are never eased |
+| `tmax C` | Thermal limit: the strip dims over the last 10 °C before the board reaches this temperature and is dark at it (default 70, 0 = off). `status` reports the percent removed as `hot`. Saved |
+| `name HOST` | mDNS hostname for the local panel, `http://HOST.local` (default `ledify`). Saved |
+| `otabase URL` | Only accept `ota` images whose URL starts with this (`otabase any` clears it), so a leaked broker login cannot flash other firmware. Saved |
 | `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |
@@ -118,6 +127,52 @@ SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which 
 ## Power budget
 
 A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware estimates every frame's draw and reports it (`need_mw`, `budget_mw` and `cap` in `status`); with `limit 1` it also scales brightness so the frame fits, otherwise (the default) it sends what was asked and the panel shows a warning. The estimate works the same way [FastLED's power model](https://fastled.io/docs/dc/d4d/struct_power_model_r_g_b.html) and [WLED's automatic brightness limiter](https://wled.discourse.group/t/automatic-brightness-limiter-confusion/10821) do: every frame's draw is estimated from each pixel's colour (`LED_RED_MW` 80, `LED_GREEN_MW` 55, `LED_BLUE_MW` 75 at full, FastLED's 16/11/15 mA WS2812 figures at 5 V) plus `LED_DARK_MW` 5 per pixel for the idle current, and the brightness is scaled so the total fits the budget. The budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract. `status` reports the resulting `cap` next to the requested `level`; on a 15 W port 300 red pixels run at about 108/255 and 300 white ones at about 36/255, on a 100 W charger white gets about 240. Like WLED's limiter this is arithmetic, not a measurement: [measured draw varies by batch](https://pjrc.com/how-much-current-do-ws2812-neopixel-leds-really-use), so adjust the per-channel numbers if a meter disagrees, and it cannot see voltage drop along the strip, so inject power every 100 pixels or so on long 5 V runs.
+
+## Timers, zones, local control
+
+**Transitions.** Every change eases in: the frame on the strip moves towards the new one by a share of the remaining
+distance each redraw, so a change settles in about `fade` ms whatever the frame rate, and `off` fades to dark before
+the rail is cut. Sound-reactive styles and LAN streams draw instantly. The BOOT button on the board toggles the
+output with a short press.
+
+**Sleep and sunrise.** `sleep N` scales the brightness linearly to zero over N minutes and turns the output off;
+`rise N` turns it on and scales from zero up to the set level. Both show their remaining seconds in `status`.
+
+**Schedules.** `sched add 06:30 rise 20` runs that command every day at 06:30 on the board's clock, which comes
+from `pool.ntp.org` once Wi-Fi is up and uses the `tz` rule. Any command works, so "warm and dim in the evening" is
+two entries: `sched add 21:00 rgb 255 170 100` and `sched add 21:00 level 90`.
+
+**Zones.** `seg 1 0 100 solid ff0000` and `seg 2 100 300 rainbow` give the first hundred pixels a red and the rest
+a rainbow; brightness, overlays and the power cap stay global. The panel draws the zones as a bar.
+
+**Thermal limit.** The barometer on the board sits next to the buck; above `tmax - 10` °C the brightness drops
+linearly, at `tmax` the strip is dark, and the panel says so.
+
+**Local panel, no cloud.** With Wi-Fi up the board announces itself over mDNS and serves the same panel at
+`http://ledify.local/` (the `name` setting) from its own flash; that page talks to the board over a WebSocket on
+the LAN, so it works with the internet down. The hosted panel shows the link. The WebSocket carries the MQTT
+payloads as text frames (`state {...}`, `live {...}`, `reply ok`, binary frames are the microphone) and takes
+command lines back.
+
+**Pixel streams.** The board listens for DDP on UDP 4048 and E1.31/sACN on UDP 5568 (170 pixels per universe,
+universes 1 and up, unicast or the 239.255.0.U multicast groups). While frames arrive they are shown as they come,
+through the power cap; `STREAM_TIMEOUT_MS` after the last one the normal styles resume. In LedFx add a device of type
+DDP (or E1.31) with the board's IP and the pixel count; xLights and Hyperion use the same two protocols.
+
+**Setup over Bluetooth.** The panel's Setup button (Chrome or Edge on a computer or Android) sends the Wi-Fi and
+broker settings to a new board over the Nordic UART service, so the USB console is only needed for the first flash.
+A saved network setting restarts the board two seconds later so several can be sent in a row.
+
+**Panel login and broker users.** The hosted panel reads its broker login from the page, so anyone with the URL
+could use it. Two things close that: the `panel` service gets `PANEL_USER` and `PANEL_PASS` variables, and Caddy
+then asks for that login for everything except `/firmware/*` (the board fetches images without credentials); and
+the broker gets a second user with an ACL that can only read `ledify/#` and write `ledify/+/cmd` and
+`ledify/+/audio/set` (variables `PANEL_MQTT_USER` and `PANEL_MQTT_PASS` on the mosquitto service, `MQTT_USER` and
+`MQTT_PASS` on the panel service), while the boards and Home Assistant keep the full `ledify` user. `otabase` pins
+where firmware may come from. Cloudflare Access in front of `ledify.notaroomba.dev` is the stricter option.
+
+**Install and demo.** The hosted panel is a PWA: "Add to Home Screen" on a phone gives it an icon and a standalone
+window. `https://.../?demo` runs it against a pretend board for trying the controls without hardware.
 
 ## Updating over the air
 

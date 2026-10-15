@@ -20,3 +20,7 @@ CONFIG_FREERTOS_HZ=1000
 # OTA: two 4 MB app slots, the new image must call ota_mark_ok() or the bootloader rolls back; plain http:// allowed
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# Local panel: web server with WebSockets, mDNS, UDP pixel streams; more sockets than the lwIP default
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_LWIP_MAX_SOCKETS=16

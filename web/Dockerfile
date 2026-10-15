@@ -8,7 +8,10 @@ RUN npm run build
 
 # Stage 2: Caddy serves the built panel and the firmware image on Railway's $PORT.
 # The broker password and Spotify client ID come from service variables at start.
+# Variables: MQTT_USER/MQTT_PASS (the panel's broker login), SPOTIFY_CLIENT_ID, and PANEL_USER/PANEL_PASS to put a
+# login in front of the page (leave PANEL_PASS unset for no login).
 FROM caddy:2.8.4-alpine
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY Caddyfile Caddyfile.auth /etc/caddy/
+COPY start.sh /start.sh
 COPY --from=build /w/dist /srv
-CMD ["sh", "-c", "sed -i \"s|__MQTT_PASS__|$MQTT_PASS|; s|__SPOTIFY_CLIENT_ID__|$SPOTIFY_CLIENT_ID|\" /srv/config.js && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
+CMD ["/start.sh"]

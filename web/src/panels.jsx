@@ -1,6 +1,6 @@
 // The cards. Each reads the board's state through the store and sends commands on the same topics the board uses.
 import { For, Index, Show, createSignal, createEffect } from 'solid-js';
-import { ui, dev, state, send, toast, logText, optimistic, opt, touch, settled } from './store';
+import { ui, dev, state, send, toast, logText, optimistic, opt, touch, settled, LOCAL } from './store';
 import { Range, Slider, Chips, Switch, confirmDialog, debounce, rgbHex } from './ui';
 import { listen, feed } from './audio';
 import { sp } from './spotify';
@@ -13,6 +13,7 @@ const EFFECTS = {
 const OVERLAYS = ['none', 'vu', 'pulse'];
 const PALETTE = ['#ffffff', '#ffd6a0', '#ff8c00', '#ffd700', '#ff0040', '#ff00ff', '#8000ff', '#0080ff', '#00e5ff', '#00ff80'];
 const CHIPS = [['ws2812', 'WS2812 / B / C / D / E, WS2813, WS2815'], ['ws2811', 'WS2811 (12 V, RGB order)'], ['sk6812', 'SK6812'], ['sk6812w', 'SK6812 RGBW'], ['ws2816', 'WS2816']];
+const mmss = s => Math.floor(s / 60) + ':' + ('0' + Math.round(s % 60)).slice(-2);
 const supply = () => { const s = state(); return s.pd && s.pd.ready ? (s.pd.mv / 1000) + ' V ' + (s.pd.ma / 1000) + ' A, ' + (s.pd.mv * s.pd.ma / 1e6).toFixed(0) + ' W' : 'no USB-PD contract, assuming 7.5 W'; };
 
 export function Hero() {
@@ -35,9 +36,16 @@ export function Hero() {
         <div class="flex items-baseline gap-2"><span class="text-4xl font-semibold tabular-nums">{level() ?? 0}</span><span class="text-sm text-muted">/ 255 brightness</span></div>
         <Range class="mt-1" label="Brightness" min={0} max={255} value={level} set={setLevel} send={v => 'level ' + v} />
         <Show when={note()}><p class="mt-1 text-sm text-warn">{note()}</p></Show>
+        <Show when={state().hot > 0}><p class="mt-1 text-sm text-warn">Dimmed {state().hot} % because the board is at {state().board_c} °C (limit {state().tmax} °C, set under Advanced).</p></Show>
         <div class="mt-2 flex items-center justify-between gap-3">
           <span class="hint">Dim automatically to stay within the supply</span>
           <Switch label="Power limit" checked={() => !!limit()} onChange={on => { setLimit(on ? 1 : 0); send('limit ' + (on ? 1 : 0)); }} />
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <span class="hint mr-1">Sleep timer</span>
+          <For each={[15, 30, 60, 120]}>{m => <button type="button" class="chip h-9 px-3 text-xs" onClick={() => send('sleep ' + m)}>{m} min</button>}</For>
+          <Show when={state().sleep > 0}><button type="button" class="chip h-9 px-3 text-xs" aria-pressed="true" onClick={() => send('sleep 0')}>fading out, {mmss(state().sleep)} left · cancel</button></Show>
+          <Show when={state().rise > 0}><span class="chip h-9 px-3 text-xs" aria-pressed="true">sunrise, {mmss(state().rise)} to go</span></Show>
         </div>
       </div>
     </div>
@@ -244,6 +252,7 @@ export function Strip() {
     </div>
     <div class="row mt-3"><span class="hint w-[92px]">Strip voltage</span><Chips chip="danger" items={[['5', '5 V'], ['12', '12 V']]} value={volt} onPick={pickVolt} /></div>
     <p class="hint mt-2">12 V only for 12 V strips (WS2815, WS2811); it needs a charger offering 15 V or more.</p>
+    <Show when={state().stream}><p class="hint mt-3 text-accent">Pixels are coming from {state().stream.src} over the LAN at {state().stream.fps} fps (DDP or E1.31); the styles resume when it stops.</p></Show>
     <Slider rowClass="mt-4" label="Tail colour fix" min={0} max={100} value={droop} set={setDroop} send={v => 'droop ' + v} fmt={v => v ? v + ' %' : 'off'} />
     <p class="hint">A strip fed from one end goes warm towards the far end as its voltage sags. This cuts red along the strip to balance it; set it so the far end looks white at your usual brightness. The real fix is a second 5 V feed into the far end.</p>
   </section>;
@@ -267,6 +276,79 @@ export function Sensors() {
     </div>
     <Show when={state().pdos && state().pdos.length}><p class="hint mt-3">Charger offers: {state().pdos.map(x => (x[0] / 1000) + ' V ' + (x[1] / 1000) + ' A').join(' · ')}. The board takes the most powerful one.</p></Show>
     <p class="hint">{state().net || ''}</p>
+    <Show when={state().name && state().ip}><p class="hint">Also on the local network at <a class="text-accent" href={'http://' + state().name + '.local/'}>http://{state().name}.local</a> (no cloud needed){state().clients ? ', ' + state().clients + ' local panel' + (state().clients > 1 ? 's' : '') + ' open' : ''}</p></Show>
+  </section>;
+}
+
+// Segments: zones of the strip with their own colour source. Edits send "seg N START END color rrggbb" and the
+// board's state echoes the list back.
+const SRC = ['solid', 'rainbow', 'palette', 'temp', 'meter', 'spectrum'];
+export function Segments() {
+  const segs = () => state().segs || [];
+  const count = () => state().count || 300;
+  const put = (i, a, b, color, rgb) => send('seg ' + i + ' ' + a + ' ' + b + ' ' + color + ' ' + rgb);
+  const add = () => {
+    const used = segs().map(s => s.i), i = [1, 2, 3, 4, 5, 6].find(k => !used.includes(k));
+    if (!i) { toast('Six zones at most', 'warn'); return; }
+    const last = segs().reduce((m, s) => Math.max(m, s.b), 0);
+    put(i, last < count() ? last : 0, count(), 'solid', 'ffffff');
+  };
+  const num = (s, key, e) => { const v = Math.max(0, Math.min(count(), Math.round(+e.currentTarget.value || 0))); const a = key === 'a' ? v : s.a, b = key === 'b' ? v : s.b; if (a < b) put(s.i, a, b, s.color, s.rgb); else toast('The end must come after the start', 'warn'); };
+  return <section class="card md:col-span-2">
+    <h2 class="card-title">Zones <small>pixels outside every zone keep the strip's own colour and effect</small></h2>
+    <div class="relative h-6 overflow-hidden rounded-lg bg-raised">
+      <For each={segs()}>{s => <div class="absolute top-0 h-full border-r border-ink text-center text-[10px] leading-6 text-white [text-shadow:0_1px_2px_#000]" style={{ left: (s.a * 100 / count()) + '%', width: ((s.b - s.a) * 100 / count()) + '%', background: s.color === 'solid' ? '#' + s.rgb : s.color === 'rainbow' ? 'linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)' : s.color === 'meter' ? 'linear-gradient(90deg,#0f0,#ff0,#f00)' : s.color === 'palette' ? '#8000ff' : '#58c6ff' }}>{s.i}</div>}</For>
+    </div>
+    <div class="mt-3 grid gap-2">
+      <For each={segs()}>{s => <div class="flex flex-wrap items-center gap-2 rounded-xl bg-raised p-2">
+        <b class="w-6 text-center text-sm">{s.i}</b>
+        <input type="number" min="0" max={count()} class="field h-9 w-20" aria-label={'zone ' + s.i + ' start'} value={s.a} onChange={e => num(s, 'a', e)} />
+        <span class="hint">to</span>
+        <input type="number" min="1" max={count()} class="field h-9 w-20" aria-label={'zone ' + s.i + ' end'} value={s.b} onChange={e => num(s, 'b', e)} />
+        <Chips items={SRC.map(k => [k, k])} value={() => s.color} onPick={v => put(s.i, s.a, s.b, v, s.rgb)} />
+        <Show when={s.color === 'solid'}><input type="color" class="h-9 w-12 cursor-pointer rounded-lg border border-line bg-raised p-0.5" aria-label={'zone ' + s.i + ' colour'} value={'#' + s.rgb} onChange={e => put(s.i, s.a, s.b, s.color, e.currentTarget.value.slice(1))} /></Show>
+        <button type="button" class="chip ml-auto h-9 px-2" aria-label={'remove zone ' + s.i} onClick={() => send('seg del ' + s.i)}>✕</button>
+      </div>}</For>
+    </div>
+    <div class="row mt-3">
+      <button type="button" class="btn btn-sm" onClick={add}>Add zone</button>
+      <Show when={segs().length}><button type="button" class="btn btn-sm" onClick={() => send('seg off')}>Remove all</button></Show>
+      <span class="hint">pixel numbers count from the board; the end is not included</span>
+    </div>
+  </section>;
+}
+
+// Schedules run on the board's clock (set from the internet once it has Wi-Fi), every day at that time.
+const TZS = [['New York', 'EST5EDT,M3.2.0,M11.1.0'], ['Chicago', 'CST6CDT,M3.2.0,M11.1.0'], ['Denver', 'MST7MDT,M3.2.0,M11.1.0'], ['Los Angeles', 'PST8PDT,M3.2.0,M11.1.0'],
+  ['London', 'GMT0BST,M3.5.0/1,M10.5.0'], ['Berlin, Paris, Madrid', 'CET-1CEST,M3.5.0,M10.5.0/3'], ['Bogotá, Lima', '<-05>5'], ['Tokyo', 'JST-9'], ['Sydney', 'AEST-10AEDT,M10.1.0,M4.1.0/3'], ['UTC', 'UTC0']];
+const QUICK = [['On', 'on'], ['Off', 'off'], ['Sunrise over 20 min', 'rise 20'], ['Sleep in 30 min', 'sleep 30'], ['Warm evening colour', 'rgb 255 170 100'], ['Dim to 40 %', 'level 100'], ['Rainbow', 'mode rainbow']];
+export function Schedule() {
+  const list = () => state().sched || [];
+  let at, cmd, tzSel;
+  createEffect(() => { if (tzSel) tzSel.value = state().tz || 'UTC0'; });
+  const add = () => { const c = cmd.value.trim(); if (!at.value || !c) { toast('Pick a time and a command', 'warn'); return; } send('sched add ' + at.value + ' ' + c); cmd.value = ''; };
+  return <section class="card md:col-span-2">
+    <h2 class="card-title">Schedule <small>{state().time ? 'board time ' + state().time : 'the board has no time yet'}</small></h2>
+    <div class="row">
+      <input ref={at} type="time" class="field" value="07:00" aria-label="Time" />
+      <input ref={cmd} type="text" class="field min-w-[200px] grow" placeholder="command, e.g. rise 20" aria-label="Scheduled command" onKeyDown={e => e.key === 'Enter' && add()} />
+      <button type="button" class="btn btn-primary btn-sm" onClick={add}>Add</button>
+    </div>
+    <div class="mt-2 flex flex-wrap gap-2"><For each={QUICK}>{([l, c]) => <button type="button" class="chip h-9 px-3 text-xs" onClick={() => { cmd.value = c; }}>{l}</button>}</For></div>
+    <div class="mt-3 grid gap-1">
+      <For each={list()} fallback={<span class="hint">nothing scheduled</span>}>{(e, i) => <div class="flex items-center gap-3 rounded-xl bg-raised px-3 py-2 text-sm">
+        <b class="tabular-nums">{e.at}</b><span class="grow font-mono text-xs text-muted">{e.cmd}</span>
+        <button type="button" class="chip h-8 px-2 text-xs" aria-label={'delete schedule ' + (i() + 1)} onClick={() => send('sched del ' + (i() + 1))}>✕</button>
+      </div>}</For>
+    </div>
+    <div class="row mt-3">
+      <label class="hint w-[92px]">Time zone</label>
+      <select ref={tzSel} class="field grow" aria-label="Time zone" onChange={e => send('tz ' + e.currentTarget.value)}>
+        <For each={TZS}>{([name, tz]) => <option value={tz}>{name}</option>}</For>
+        <Show when={state().tz && !TZS.some(t => t[1] === state().tz)}><option value={state().tz}>{state().tz}</option></Show>
+      </select>
+    </div>
+    <p class="hint mt-2">A command is anything the board understands: on, off, level N, rgb R G B, mode NAME, rise N (sunrise over N minutes), sleep N (fade out over N minutes), palette, seg … Up to 8 entries.</p>
   </section>;
 }
 
@@ -317,6 +399,8 @@ export function Presets() {
 export function Advanced() {
   const [tempLo, setTempLo] = optimistic('temp_lo', () => state().temp_lo);
   const [tempHi, setTempHi] = optimistic('temp_hi', () => state().temp_hi);
+  const [fadeMs, setFadeMs] = optimistic('fade', () => state().fade);
+  const [tmax, setTmax] = optimistic('tmax', () => state().tmax);
   let tempIn, otaUrl, cmd;
   const ota = async () => { if (await confirmDialog('Update the firmware?', 'From ' + otaUrl.value + '. The strip restarts when the download is done, about a minute.', 'Update')) send('ota ' + otaUrl.value); };
   const sendCmd = () => { const c = cmd.value.trim(); if (c) { send(c); cmd.value = ''; } };
@@ -326,7 +410,11 @@ export function Advanced() {
       <Slider rowClass="mt-3" label="Cold colour at" min={-10} max={40} value={tempLo} set={setTempLo} send={v => 'temp ' + v + ' ' + tempHi()} fmt={v => v + ' °C'} />
       <Slider label="Hot colour at" min={0} max={60} value={tempHi} set={setTempHi} send={v => 'temp ' + tempLo() + ' ' + v} fmt={v => v + ' °C'} />
       <div class="row mt-2"><label class="hint w-[92px]">Feed °C</label><input ref={tempIn} type="number" step="0.5" class="field w-24" placeholder="21.5" aria-label="Temperature to feed" /><button type="button" class="btn btn-sm" onClick={() => tempIn.value !== '' && send('temp ' + tempIn.value)}>Send</button><span class="hint">used by the "temp" effect instead of the board's sensor</span></div>
+      <Slider rowClass="mt-3" label="Transition" min={0} max={2000} step={50} value={fadeMs} set={setFadeMs} send={v => 'fade ' + v} fmt={v => v ? v + ' ms' : 'instant'} />
+      <Slider label="Thermal limit" min={0} max={120} step={5} value={tmax} set={setTmax} send={v => 'tmax ' + v} fmt={v => v ? v + ' °C' : 'off'} />
+      <p class="hint">Colour and brightness changes ease over the transition time. The strip dims as the board warms over the last 10 °C before the thermal limit and is dark at the limit (it is at {state().board_c ?? '–'} °C now).</p>
       <div class="row mt-4"><label class="hint w-[92px]">Firmware</label><input ref={otaUrl} type="url" class="field grow" aria-label="Firmware URL" value={location.origin + '/firmware/ledify.bin'} /><button type="button" class="btn" onClick={ota}>Update over the air</button></div>
+      <Show when={!LOCAL}><div class="row mt-2"><span class="hint w-[92px]">OTA source</span><button type="button" class="btn btn-sm" onClick={() => send('otabase ' + location.origin + '/')}>Only accept images from this site</button><span class="hint">so a leaked broker login cannot flash other firmware; "otabase any" undoes it</span></div></Show>
       <div class="row mt-3"><label class="hint w-[92px]">Command</label><input ref={cmd} type="text" class="field grow" placeholder="e.g. status" aria-label="Command" onKeyDown={e => e.key === 'Enter' && sendCmd()} /><button type="button" class="btn" onClick={sendCmd}>Send</button></div>
       <div class="log">{logText()}</div>
     </details>

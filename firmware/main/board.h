@@ -38,3 +38,9 @@
 #define LED_POWER_SETTLE_MS 100     // buck soft start + pixel power-on reset before the first frame
 #define WIFI_FAILS_BEFORE_SWITCH 4  // failed joins in a row before trying the fallback network
 #define PD_START_DELAY_MS 100   // the source starts sending capabilities right away; answer them promptly
+#define PIN_BUTTON      9   // the BOOT button, free after reset: a short press toggles the output
+#define FADE_MS       300   // default transition: colour and brightness changes ease over about this long
+#define THERMAL_MAX_C  70   // board temperature at which the strip is fully dimmed; dimming starts 10 degrees lower
+#define STREAM_TIMEOUT_MS 2500  // no DDP/E1.31 frame for this long: back to the normal styles
+#define STREAM_PORT_DDP  4048
+#define STREAM_PORT_E131 5568
