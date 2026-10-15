@@ -5,7 +5,7 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | File | Does |
 | --- | --- |
 | `main/main.c` | Startup, the command handler, the frame loop that composes colour × brightness × overlay, USB serial console |
-| `main/pd.c` | USB-PD sink on the FUSB302B: requests the highest fixed voltage up to 20 V |
+| `main/pd.c` | USB-PD sink on the FUSB302B: requests the most powerful fixed offer up to 20 V, renegotiates for 15 V+ when the 12 V output is selected |
 | `main/leds.c` | Addressable strip over RMT (WS2812 family, WS2811, SK6812, WS2816), the colour sources, the power cap, buck enable, 5 V / 12 V select |
 | `main/sensors.c` | OPT4001 light sensor (I2C), BMI323 IMU and BMP581 barometer (SPI) |
 | `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble |
@@ -55,6 +55,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
 | `wifi2 SSID PASSWORD` | Save a fallback network and restart (`wifi2 off` clears it). The board joins the primary first and switches after `WIFI_FAILS_BEFORE_SWITCH` failed attempts, alternating until one works |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
+| `limit 0\|1` | 1 dims to the power budget, 0 (default) sends what was asked and only reports the estimate. Saved |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `audio L B M T P` | Feed loudness, bass, mid, treble and pulse (0-255) from outside; overrides the microphone for 1 s per packet |
@@ -110,7 +111,7 @@ SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which 
 
 ## Power budget
 
-A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware never sends more than the supply can take, the same way [FastLED's power model](https://fastled.io/docs/dc/d4d/struct_power_model_r_g_b.html) and [WLED's automatic brightness limiter](https://wled.discourse.group/t/automatic-brightness-limiter-confusion/10821) do: every frame's draw is estimated from each pixel's colour (`LED_RED_MW` 80, `LED_GREEN_MW` 55, `LED_BLUE_MW` 75 at full, FastLED's 16/11/15 mA WS2812 figures at 5 V) plus `LED_DARK_MW` 5 per pixel for the idle current, and the brightness is scaled so the total fits the budget. The budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract. `status` reports the resulting `cap` next to the requested `level`; on a 15 W port 300 red pixels run at about 108/255 and 300 white ones at about 36/255, on a 100 W charger white gets about 240. Like WLED's limiter this is arithmetic, not a measurement: [measured draw varies by batch](https://pjrc.com/how-much-current-do-ws2812-neopixel-leds-really-use), so adjust the per-channel numbers if a meter disagrees, and it cannot see voltage drop along the strip, so inject power every 100 pixels or so on long 5 V runs.
+A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware estimates every frame's draw and reports it (`need_mw`, `budget_mw` and `cap` in `status`); with `limit 1` it also scales brightness so the frame fits, otherwise (the default) it sends what was asked and the panel shows a warning. The estimate works the same way [FastLED's power model](https://fastled.io/docs/dc/d4d/struct_power_model_r_g_b.html) and [WLED's automatic brightness limiter](https://wled.discourse.group/t/automatic-brightness-limiter-confusion/10821) do: every frame's draw is estimated from each pixel's colour (`LED_RED_MW` 80, `LED_GREEN_MW` 55, `LED_BLUE_MW` 75 at full, FastLED's 16/11/15 mA WS2812 figures at 5 V) plus `LED_DARK_MW` 5 per pixel for the idle current, and the brightness is scaled so the total fits the budget. The budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract. `status` reports the resulting `cap` next to the requested `level`; on a 15 W port 300 red pixels run at about 108/255 and 300 white ones at about 36/255, on a 100 W charger white gets about 240. Like WLED's limiter this is arithmetic, not a measurement: [measured draw varies by batch](https://pjrc.com/how-much-current-do-ws2812-neopixel-leds-really-use), so adjust the per-channel numbers if a meter disagrees, and it cannot see voltage drop along the strip, so inject power every 100 pixels or so on long 5 V runs.
 
 ## Updating over the air
 
