@@ -78,6 +78,21 @@ Designed in KiCad with attention to RF design and high current power delivery. T
 | 9    | CHIP_BOOT  | Boot button                               |
 | 8    | -          | Strapping pin, pulled up to 3V3           |
 
+### Next revision
+
+Rev 1 works; these are the changes queued for rev 2, each with the reason it is worth a spin of the board.
+
+| Change | Why | How |
+| --- | --- | --- |
+| Measure the strip current | The power limit and the warnings are arithmetic from the frame; a measurement catches strips that draw more than the model and lets the firmware show real watts | INA226 (I2C, address 0x40 next to the FUSB302 at 0x22 and the OPT4001) with a 2 mΩ 2512 shunt high side on the LED rail after the buck (10 A gives 20 mV, 1 mA resolution; 0.2 W in the shunt). Its VBUS pin reads the rail, so it also sees the 12 V setting. ALERT to GPIO14 for an over-current interrupt |
+| Second data output | Two strips from one board, or a strip fed from both ends with the data going into each half | A second SIG pad on GPIO17 (a second RMT channel in firmware). Both outputs through a 74AHCT1G125 each: 3.3 V data into 5 V pixels is out of spec today and works only over short leads |
+| 5.2 V setting for long strips | A one-end-fed 5 V strip sags towards the far end and goes warm; starting 0.2 V higher is what long-strip supplies do | 499 kΩ from U6 FB to the drain of a 2N7002, gate from GPIO0 with a 100 kΩ pull-down. In parallel with the 24.9 kΩ bottom resistor it makes 23.7 kΩ, so 1.0 V × (1 + 100/23.7) = 5.22 V on command; the 12 V setting (14.3 kΩ switched in by Q1) is untouched |
+| Power injection pads | The real fix for the sag is a second feed into the far end, and it needs a 10 A home on the board | A second VCC/GND pad pair next to the first, both on the wide copper of the LED rail |
+| A user button | The BOOT button already toggles the output in firmware, but it sits under the case and shares the strapping pin | A button on GPIO1 with its own pull-up, away from the strapping pins |
+| Microphone port | Board 1's ICS-43434 passes the electrical checks but hears nothing: the acoustic port is suspected | Confirm the port hole in the copper and solder mask under the mic, and keep the mic away from the buck inductor |
+
+Free GPIOs after rev 1: 0, 1, 14, 17 (4 and 15 are strapping pins). The feedback network today: 100 kΩ top, 24.9 kΩ bottom, 1.0 V reference, 5.02 V; Q1 adds 14.3 kΩ in parallel for 12.0 V.
+
 ### JLCPCB Quote
 
 <img src="assets/cart.png" alt="JLCPCB Quote" width="800"/>
