@@ -231,6 +231,7 @@ static void pd_poll(void)
         st.n_pdos = 0;
         for (int i = 0; i < n && st.n_pdos < 7; i++) {
             if (objs[i] >> 30) {
+                ESP_LOGI(TAG, "pdo %d: type %lu (battery/variable/augmented), skipped", i + 1, (unsigned long)(objs[i] >> 30));
                 continue;                            // fixed-supply PDOs only
             }
             st.pdo_mv[st.n_pdos] = ((objs[i] >> 10) & 0x3FF) * 50;
@@ -245,10 +246,10 @@ static void pd_poll(void)
         st.ready = true;
         ESP_LOGI(TAG, "contract: %d mV %d mA", st.contract_mv, st.contract_ma);
     } else if (n == 0 && type == CTRL_REJECT) {
-        st.contract_mv = 5000;
-        st.contract_ma = 0;
+        st.contract_mv = 5000;                       // the source keeps vSafe5V; its first PDO says how much current
+        st.contract_ma = st.n_pdos && st.pdo_mv[0] == 5000 ? st.pdo_ma[0] : 500;
         st.ready = true;
-        ESP_LOGW(TAG, "request rejected, staying at 5 V");
+        ESP_LOGW(TAG, "request rejected, staying at 5 V %d mA", st.contract_ma);
     } else if (n == 0 && type == CTRL_GET_SNK_CAP) {
         uint32_t pdo = (1u << 26) | (100u << 10) | 300;   // sink 5 V 3 A, USB communications capable
         send(DATA_SNK_CAP, &pdo, 1);
