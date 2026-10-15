@@ -7,6 +7,7 @@
 #include "board.h"
 #include "fft.h"
 #include "driver/i2s_std.h"
+#include "driver/gpio.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -29,6 +30,9 @@ static int32_t avg;
 static uint32_t floor_q;       // running noise floor of x in 1/256 steps, so small signals still move it
 static int hold, nblock;
 static volatile uint32_t block_max_us, drops;   // real-time check, read and reset by mic_stats()
+static int32_t peak_raw[16];   // diagnostics: samples from the loudest block of the last minute
+static uint32_t peak_rms;
+static int64_t peak_at;
 static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
 static volatile int64_t fed_at;
 
@@ -50,6 +54,14 @@ static void block(void)
         acc += (int64_t)s * s;
     }
     rms = (uint32_t)sqrtf((float)(acc / N)) >> 8;
+    int64_t now = esp_timer_get_time();
+    if (rms > peak_rms || now - peak_at > 60000000LL) {      // keep the loudest block of the last minute
+        peak_rms = rms;
+        peak_at = now;
+        for (int i = 0; i < 16; i++) {
+            peak_raw[i] = (raw[i] >> 8) - mean;
+        }
+    }
     uint32_t x = (uint32_t)rms * gain;
     uint32_t xq = x << 8;
     if (xq < floor_q) {
@@ -133,6 +145,7 @@ bool mic_init(void)
     for (int i = 0; i < 12; i++) {                   // discard ~100 ms: the mic's DC filter settles after power-on
         i2s_channel_read(rx, raw, sizeof raw, &n, 100);
     }
+    gpio_set_pull_mode(PIN_MIC_SD, GPIO_PULLDOWN_ONLY);   // the datasheet wants 100k to ground on SD; the pad has none
     xTaskCreate(mic_task, "mic", 4096, NULL, 4, NULL);
     return true;
 }
@@ -188,4 +201,35 @@ void mic_feed(uint8_t l, const uint8_t b[3], uint8_t p)
     }
     fed_pulse = p;
     fed_at = esp_timer_get_time();
+}
+
+// Diagnostics for "is any sound reaching the chip": the current block and the loudest block of the last minute.
+int mic_raw_json(char *out, size_t n)
+{
+    int32_t mn = INT32_MAX, mx = INT32_MIN;
+    int64_t sum = 0;
+    for (int i = 0; i < N; i++) {
+        int32_t s = raw[i] >> 8;
+        sum += s;
+        mn = s < mn ? s : mn;
+        mx = s > mx ? s : mx;
+    }
+    int w = snprintf(out, n, "{\"micraw\":{\"min\":%ld,\"max\":%ld,\"mean\":%ld,\"rms\":%lu,\"now\":[",
+                     (long)mn, (long)mx, (long)(sum / N), (unsigned long)rms << 8);
+    for (int i = 0; i < 16; i++) {
+        w += snprintf(out + w, n - w, "%s%ld", i ? "," : "", (long)(raw[i] >> 8));
+    }
+    float pk = peak_rms ? MIC_DB_FULL_SCALE + 20 * log10f(peak_rms / 32768.0f * 1.4142f) : 0;
+    w += snprintf(out + w, n - w, "],\"peak_db\":%.0f,\"peak_age_s\":%lld,\"peak\":[", pk,
+                  (long long)((esp_timer_get_time() - peak_at) / 1000000));
+    for (int i = 0; i < 16; i++) {
+        w += snprintf(out + w, n - w, "%s%ld", i ? "," : "", (long)peak_raw[i]);
+    }
+    w += snprintf(out + w, n - w, "]}}");
+    return w;
+}
+
+float mic_db_peak(void)
+{
+    return peak_rms ? MIC_DB_FULL_SCALE + 20 * log10f(peak_rms / 32768.0f * 1.4142f) : 0;
 }

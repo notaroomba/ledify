@@ -335,7 +335,7 @@ static void status(char *out, size_t n)
                       d.acc[0], d.acc[1], d.acc[2], d.gyr[0], d.gyr[1], d.gyr[2]);
     }
     if (have_mic) {
-        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f,\"loud\":%d", mic_db(), mic_loud());
+        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f,\"db_peak\":%.0f,\"loud\":%d", mic_db(), mic_db_peak(), mic_loud());
     }
     snprintf(out + w, n - w, "}");
 }
@@ -583,6 +583,10 @@ static void handle(char *line)
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
+    } else if (!strcmp(tok[0], "micraw")) {                       // diagnostics on the live topic
+        mic_raw_json(out, sizeof out);
+        net_publish_live(out);
+        reply("ok, see the live topic");
     } else if (!strcmp(tok[0], "live") && n == 2) {
         int s = atoi(tok[1]);
         live_until = esp_timer_get_time() + (s < 0 ? 0 : s > 600 ? 600 : s) * 1000000LL;

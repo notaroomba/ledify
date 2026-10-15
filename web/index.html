@@ -166,7 +166,7 @@
       <div class="tile"><b id="lux">–</b><span>lux</span></div>
       <div class="tile"><b id="temp">–</b><span>°C on the board</span></div>
       <div class="tile"><b id="kpa">–</b><span>kPa</span></div>
-      <div class="tile"><b id="db">–</b><span>dB sound</span></div>
+      <div class="tile"><b id="db">–</b><span>dB sound, peak of the last minute</span></div>
       <div class="tile"><b id="cap">–</b><span>brightness sent</span></div>
     </div>
     <p class="hint" id="pdos"></p>
@@ -304,11 +304,11 @@ function render(d, what) {
     if ('lux' in s) $('lux').textContent = Math.round(s.lux);
     if ('temp_c' in s) $('temp').textContent = s.temp_c.toFixed(1);
     if ('pressure_pa' in s) $('kpa').textContent = (s.pressure_pa / 1000).toFixed(2);
-    if ('sound_db' in s) $('db').textContent = s.sound_db.toFixed(0);
+    if ('sound_db' in s) $('db').textContent = s.sound_db.toFixed(0) + (s.db_peak ? ' · peak ' + s.db_peak : '');
   }
   if (z && (what === 'sensors' || what === 'all')) {
     $('lux').textContent = Math.round(z.lux); $('temp').textContent = z.temp_c.toFixed(1);
-    $('kpa').textContent = z.pressure_kpa.toFixed(2); $('db').textContent = z.sound_db.toFixed(0);
+    $('kpa').textContent = z.pressure_kpa.toFixed(2);
   }
   if (l && (what === 'light/state' || what === 'all') && l.color) {
     const h = v => ('0' + v.toString(16)).slice(-2);
@@ -316,10 +316,11 @@ function render(d, what) {
   }
 }
 function renderLive(v) {
+  if (v.loud === undefined) return;
   $('loud').style.width = (v.loud * 100 / 255) + '%';
   for (let k = 0; k < 3; k++) $('b' + k).style.width = (v.bands[k] * 100 / 255) + '%';
   $('pulse').classList.toggle('on', v.pulse > 128);
-  $('db').textContent = v.db;
+  $('db').textContent = v.db + ($('db').textContent.includes('peak') ? ' · ' + $('db').textContent.split(' · ')[1] : '');
 }
 
 // ---- controls
