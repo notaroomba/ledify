@@ -58,6 +58,8 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `limit 0\|1` | 1 dims to the power budget, 0 (default) sends what was asked and only reports the estimate. Saved |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
+| `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
+| `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |
 | `audio L B M T P` | Feed loudness, bass, mid, treble and pulse (0-255) from outside; overrides the microphone for 1 s per packet |
 | `help` | Command list |
 
@@ -140,6 +142,7 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | `ledify/<id>/KEY/set` | in | A bare value, run as the command `KEY value`. The Home Assistant entities use `count`, `type`, `auto` (`ON`/`OFF`), `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`; `temp` feeds a temperature in for the `temp` colour |
 | `ledify/<id>/audio/set` | in | `L B M T P` from the web panel's audio analysis (file or microphone) |
 | `ledify/<id>/live` | out | `{"loud","bands","pulse","db","cap"}` at 10 Hz while a `live` lease is active |
+| `ledify/<id>/audio` | out | 1 KB binary messages of 16 kHz 16-bit little-endian PCM while a `listen` lease is active |
 | `ledify/<id>/light/state` | out | JSON light state |
 | `ledify/<id>/state` | out | Same JSON as `status` |
 | `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}` (kPa, approximate dB SPL) |
