@@ -3,8 +3,8 @@
 // Topics (ID = last three bytes of the Wi-Fi MAC, e.g. ledify_d3ed08):
 //   ledify/ID/cmd          text commands, same as BLE ("rgb 255 0 0", "mode rainbow", ...)
 //   ledify/ID/light/set    Home Assistant JSON light commands
-//   ledify/ID/count/set    pixel count from the Home Assistant slider
-//   ledify/ID/type/set     chip type from the Home Assistant select
+//   ledify/ID/KEY/set      a bare value from a Home Assistant entity, run as the command "KEY value": count, type,
+//                          auto (ON/OFF), gain, lux_lo, lux_hi, night, temp_lo, temp_hi, temp (a reading in C)
 //   ledify/ID/light/state  JSON light state
 //   ledify/ID/state        full status JSON
 //   ledify/ID/sensors      {"lux":..,"temp_c":..,"pressure_hpa":..,"sound":..}
@@ -31,7 +31,8 @@ static char id[16];                       // ledify_xxxxxx
 static char ip[16];
 static bool wifi_up, mqtt_up;
 static esp_mqtt_client_handle_t mqtt;
-static char t_cmd[48], t_set[48], t_count[48], t_type[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
+static char prefix[32];                   // ledify/ID/
+static char t_cmd[48], t_set[48], t_any[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
 
 static bool load(const char *key, char *buf, size_t n)
 {
@@ -85,6 +86,18 @@ static bool is_topic(esp_mqtt_event_handle_t ev, const char *t)
     return ev->topic_len == (int)strlen(t) && !strncmp(ev->topic, t, ev->topic_len);
 }
 
+// ledify/ID/KEY/set: pull KEY out of the topic.
+static bool set_key(esp_mqtt_event_handle_t ev, char *key, size_t n)
+{
+    int pl = strlen(prefix), kl = ev->topic_len - pl - 4;
+    if (kl < 1 || kl >= (int)n || strncmp(ev->topic, prefix, pl) || strncmp(ev->topic + pl + kl, "/set", 4)) {
+        return false;
+    }
+    memcpy(key, ev->topic + pl, kl);
+    key[kl] = 0;
+    return true;
+}
+
 // Home Assistant entities publish a bare value; turn it into the matching text command.
 static void queue_prefixed(const char *cmd, const char *data, int len)
 {
@@ -96,34 +109,59 @@ static void queue_prefixed(const char *cmd, const char *data, int len)
 // One retained discovery message per entity so Home Assistant creates them on its own.
 static void discover(void)
 {
-    char topic[96], msg[640];
-    const char *dev = "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Ledify\",\"mf\":\"notaroomba\",\"mdl\":\"Ledify rev1\"}";
-    char devs[160];
-    snprintf(devs, sizeof devs, dev, id);
+    char topic[96], msg[640], devs[160], cmd[64];
+    snprintf(devs, sizeof devs, "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Ledify\",\"mf\":\"notaroomba\",\"mdl\":\"Ledify rev1\"}", id);
 
     snprintf(topic, sizeof topic, "homeassistant/light/%s/config", id);
     snprintf(msg, sizeof msg,
              "{\"name\":\"Ledify\",\"uniq_id\":\"%s_light\",\"schema\":\"json\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
              "\"avty_t\":\"%s\",\"brightness\":true,\"supported_color_modes\":[\"rgb\"],\"effect\":true,"
-             "\"effect_list\":[\"solid\",\"rainbow\",\"sound\",\"auto\"],%s}",
+             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
              id, t_set, t_lstate, t_avail, devs);
     esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
 
-    snprintf(topic, sizeof topic, "homeassistant/number/%s_count/config", id);
-    snprintf(msg, sizeof msg,
-             "{\"name\":\"Ledify pixels\",\"uniq_id\":\"%s_count\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
-             "\"val_tpl\":\"{{ value_json.count }}\",\"avty_t\":\"%s\",\"min\":1,\"max\":%d,\"step\":1,"
-             "\"mode\":\"slider\",\"icon\":\"mdi:led-strip-variant\",%s}",
-             id, t_count, t_state, t_avail, MAX_LEDS, devs);
-    esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
-
     snprintf(topic, sizeof topic, "homeassistant/select/%s_type/config", id);
+    snprintf(cmd, sizeof cmd, "%stype/set", prefix);
     snprintf(msg, sizeof msg,
              "{\"name\":\"Ledify chip\",\"uniq_id\":\"%s_type\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
              "\"val_tpl\":\"{{ value_json.type }}\",\"avty_t\":\"%s\",\"icon\":\"mdi:chip\","
              "\"options\":[\"ws2812\",\"ws2811\",\"sk6812\",\"sk6812w\",\"ws2816\"],%s}",   // keep in step with LED_TYPES
-             id, t_type, t_state, t_avail, devs);
+             id, cmd, t_state, t_avail, devs);
     esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
+
+    snprintf(topic, sizeof topic, "homeassistant/switch/%s_auto/config", id);
+    snprintf(cmd, sizeof cmd, "%sauto/set", prefix);
+    snprintf(msg, sizeof msg,
+             "{\"name\":\"Ledify auto brightness\",\"uniq_id\":\"%s_auto\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
+             "\"val_tpl\":\"{{ 'ON' if value_json.auto else 'OFF' }}\",\"avty_t\":\"%s\",\"icon\":\"mdi:brightness-auto\",%s}",
+             id, cmd, t_state, t_avail, devs);
+    esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
+
+    // One number per saved value; the key is also the command and the status field.
+    static const struct { const char *key, *name, *unit, *icon, *mode; int min, max; } nums[] = {   // keep in step with settings[] in main.c
+        {"count", "pixels", "", "mdi:led-strip-variant", "slider", 1, MAX_LEDS},
+        {"gain", "gain", "", "mdi:microphone", "slider", 1, 100},
+        {"lux_lo", "lux low", "lx", "mdi:brightness-4", "box", 0, 10000},
+        {"lux_hi", "lux high", "lx", "mdi:brightness-7", "box", 1, 20000},
+        {"night", "night lux", "lx", "mdi:weather-night", "box", 0, 1000},
+        {"temp_lo", "temp low", "°C", "mdi:snowflake", "slider", -40, 100},
+        {"temp_hi", "temp high", "°C", "mdi:fire", "slider", -40, 100},
+    };
+    for (int i = 0; i < sizeof nums / sizeof nums[0]; i++) {
+        snprintf(topic, sizeof topic, "homeassistant/number/%s_%s/config", id, nums[i].key);
+        snprintf(cmd, sizeof cmd, "%s%s/set", prefix, nums[i].key);
+        int w = snprintf(msg, sizeof msg,
+                         "{\"name\":\"Ledify %s\",\"uniq_id\":\"%s_%s\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
+                         "\"val_tpl\":\"{{ value_json.%s }}\",\"avty_t\":\"%s\",\"min\":%d,\"max\":%d,\"step\":1,"
+                         "\"mode\":\"%s\",\"icon\":\"%s\"",
+                         nums[i].name, id, nums[i].key, cmd, t_state, nums[i].key, t_avail, nums[i].min, nums[i].max,
+                         nums[i].mode, nums[i].icon);
+        if (nums[i].unit[0]) {
+            w += snprintf(msg + w, sizeof msg - w, ",\"unit_of_meas\":\"%s\"", nums[i].unit);
+        }
+        snprintf(msg + w, sizeof msg - w, ",%s}", devs);
+        esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
+    }
 
     struct { const char *key, *name, *unit, *cls; } sensors[] = {
         {"lux", "Illuminance", "lx", "illuminance"},
@@ -151,14 +189,13 @@ static void discover(void)
 static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void *data)
 {
     esp_mqtt_event_handle_t ev = data;
+    char key[16];
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         mqtt_up = true;
         ESP_LOGI(TAG, "mqtt connected");
         esp_mqtt_client_subscribe(mqtt, t_cmd, 1);
-        esp_mqtt_client_subscribe(mqtt, t_set, 1);
-        esp_mqtt_client_subscribe(mqtt, t_count, 1);
-        esp_mqtt_client_subscribe(mqtt, t_type, 1);
+        esp_mqtt_client_subscribe(mqtt, t_any, 1);
         esp_mqtt_client_publish(mqtt, t_avail, "online", 0, 1, 1);
         discover();
         queue_cmd("status", 6);                       // publish a first state right away
@@ -169,12 +206,10 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
         break;
     case MQTT_EVENT_DATA:
         if (ev->total_data_len == ev->data_len) {    // small payloads only; we never need more
-            if (is_topic(ev, t_count)) {             // the slider sends a bare number, maybe "300.0"
-                queue_prefixed("count", ev->data, ev->data_len);
-            } else if (is_topic(ev, t_type)) {
-                queue_prefixed("type", ev->data, ev->data_len);
-            } else {
+            if (is_topic(ev, t_cmd) || is_topic(ev, t_set)) {
                 queue_cmd(ev->data, ev->data_len);
+            } else if (set_key(ev, key, sizeof key)) {   // a slider sends a bare number, maybe "300.0"
+                queue_prefixed(key, ev->data, ev->data_len);
             }
         }
         break;
@@ -225,14 +260,14 @@ void net_init(QueueHandle_t q)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(id, sizeof id, "ledify_%02x%02x%02x", mac[3], mac[4], mac[5]);
-    snprintf(t_cmd, sizeof t_cmd, "ledify/%s/cmd", id);
-    snprintf(t_set, sizeof t_set, "ledify/%s/light/set", id);
-    snprintf(t_count, sizeof t_count, "ledify/%s/count/set", id);
-    snprintf(t_type, sizeof t_type, "ledify/%s/type/set", id);
-    snprintf(t_lstate, sizeof t_lstate, "ledify/%s/light/state", id);
-    snprintf(t_state, sizeof t_state, "ledify/%s/state", id);
-    snprintf(t_sensors, sizeof t_sensors, "ledify/%s/sensors", id);
-    snprintf(t_avail, sizeof t_avail, "ledify/%s/status", id);
+    snprintf(prefix, sizeof prefix, "ledify/%s/", id);
+    snprintf(t_cmd, sizeof t_cmd, "%scmd", prefix);
+    snprintf(t_set, sizeof t_set, "%slight/set", prefix);
+    snprintf(t_any, sizeof t_any, "%s+/set", prefix);
+    snprintf(t_lstate, sizeof t_lstate, "%slight/state", prefix);
+    snprintf(t_state, sizeof t_state, "%sstate", prefix);
+    snprintf(t_sensors, sizeof t_sensors, "%ssensors", prefix);
+    snprintf(t_avail, sizeof t_avail, "%sstatus", prefix);
 
     load("mqtt_url", mqtt_url, sizeof mqtt_url);
     load("mqtt_user", mqtt_user, sizeof mqtt_user);

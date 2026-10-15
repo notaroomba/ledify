@@ -28,9 +28,8 @@ static uint8_t level = 128;
 static uint16_t count = NUM_LEDS;
 static uint32_t budget_mw = LED_BUDGET_NO_PD_MW;
 static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour set gives white
-static uint8_t hue;
-static void show(uint8_t r, uint8_t g, uint8_t b, uint8_t lvl);
-static uint8_t capped(uint32_t sum_rgb, uint8_t lvl);
+static uint8_t hue, temp_pos = 128, last_cap;
+static uint8_t fb[MAX_LEDS][3];                          // one frame at full brightness, before the power cap
 
 // (Re)create the RMT device for the selected chip: timing comes from the model, byte order from the format.
 static void make_strip(void)
@@ -85,7 +84,6 @@ bool leds_set_type(const char *name)
         if (!strcmp(name, types[i].name)) {
             type_idx = i;
             make_strip();
-            show(cur_r, cur_g, cur_b, level);
             return true;
         }
     }
@@ -105,7 +103,6 @@ void leds_power(bool on)
     gpio_set_level(PIN_LED_ENABLE, on);
     if (on) {
         vTaskDelay(pdMS_TO_TICKS(LED_POWER_SETTLE_MS));   // the pixels have to be powered before they can latch a frame
-        show(cur_r, cur_g, cur_b, level);     // restore the last colour; it was cleared at power off
     }
 }
 
@@ -118,7 +115,6 @@ void leds_select_12v(bool v)
 void leds_set_level(uint8_t l)
 {
     level = l;
-    leds_fill(cur_r, cur_g, cur_b);
 }
 
 uint8_t leds_get_level(void)
@@ -131,7 +127,6 @@ void leds_set_count(uint16_t n)
     led_strip_clear(strip);                 // pixels past the new end keep their last frame, so blank them first
     count = n < 1 ? 1 : n > MAX_LEDS ? MAX_LEDS : n;
     make_strip();                           // the RMT device sends max_leds pixels per frame
-    show(cur_r, cur_g, cur_b, level);
 }
 
 uint16_t leds_get_count(void)
@@ -146,29 +141,12 @@ void leds_set_budget_mw(uint32_t mw)
 
 uint8_t leds_get_cap(void)
 {
-    return capped(cur_r + cur_g + cur_b, level);
-}
-
-// Scale a level down until the frame fits the power budget: count pixels at (r+g+b)/765 of full white each.
-static uint8_t capped(uint32_t sum_rgb, uint8_t lvl)
-{
-    uint32_t need = (uint32_t)count * sum_rgb / 255 * lvl * LED_MW_PER_CHANNEL / 255;   // mW at this level
-    return need > budget_mw ? lvl * budget_mw / need : lvl;
-}
-
-static void show(uint8_t r, uint8_t g, uint8_t b, uint8_t lvl)
-{
-    lvl = capped(r + g + b, lvl);
-    for (int i = 0; i < count; i++) {
-        pixel(i, r * lvl / 255, g * lvl / 255, b * lvl / 255);
-    }
-    led_strip_refresh(strip);
+    return last_cap;
 }
 
 void leds_fill(uint8_t r, uint8_t g, uint8_t b)
 {
     cur_r = r; cur_g = g; cur_b = b;
-    show(r, g, b, level);
 }
 
 void leds_get_color(uint8_t *r, uint8_t *g, uint8_t *b)
@@ -176,11 +154,9 @@ void leds_get_color(uint8_t *r, uint8_t *g, uint8_t *b)
     *r = cur_r; *g = cur_g; *b = cur_b;
 }
 
-void leds_scaled(float f)
+void leds_set_temp(uint8_t pos)
 {
-    if (f < 0) f = 0;
-    if (f > 1) f = 1;
-    show(cur_r, cur_g, cur_b, (uint8_t)(level * f));
+    temp_pos = pos;
 }
 
 static void hsv(uint8_t h, uint8_t *r, uint8_t *g, uint8_t *b)
@@ -197,19 +173,63 @@ static void hsv(uint8_t h, uint8_t *r, uint8_t *g, uint8_t *b)
     }
 }
 
-void leds_rainbow_step(void)
+// Blue through white to red as the temperature position goes 0..255.
+static void temp_rgb(uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    hue++;
-    uint8_t lvl = capped(383, level);           // a full rainbow averages r+g+b = 383
-    for (int i = 0; i < count; i++) {
-        uint8_t r, g, b;
-        hsv(hue + i * 256 / count, &r, &g, &b);
-        pixel(i, r * lvl / 255, g * lvl / 255, b * lvl / 255);
+    if (temp_pos < 128) {
+        *r = *g = temp_pos * 2;
+        *b = 255;
+    } else {
+        *r = 255;
+        *g = *b = (255 - temp_pos) * 2;
     }
-    led_strip_refresh(strip);
 }
 
-void leds_refresh(void)
+// Scale a level down until the frame fits the power budget. sum is r+g+b over every pixel at full brightness.
+static uint8_t capped(uint32_t sum, uint8_t lvl)
 {
-    show(cur_r, cur_g, cur_b, level);
+    uint32_t need = sum / 255 * lvl * LED_MW_PER_CHANNEL / 255;   // mW at this level
+    return need > budget_mw ? lvl * budget_mw / need : lvl;
+}
+
+void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3])
+{
+    uint8_t r = cur_r, g = cur_g, b = cur_b;
+    if (c == COLOR_TEMP) {
+        temp_rgb(&r, &g, &b);
+    }
+    if (c == COLOR_RAINBOW) {
+        hue++;
+    }
+    uint32_t sum = 0;
+    for (int i = 0; i < count; i++) {
+        uint8_t *p = fb[i];
+        p[0] = p[1] = p[2] = 0;
+        if (i >= lit) {
+            continue;
+        }
+        switch (c) {
+        case COLOR_RAINBOW:
+            hsv(hue + i * 256 / count, p, p + 1, p + 2);
+            break;
+        case COLOR_METER:                                           // green, yellow, red along the strip
+            hsv(85 - i * 85 / count, p, p + 1, p + 2);
+            break;
+        case COLOR_SPECTRUM: {                                      // a red, green and blue bar, one per band. ponytail: fixed colours, tint from rgb if anyone asks
+            int k = i * 3 / count, start = k * count / 3;
+            if ((i - start) * 255 < bands[k] * ((k + 1) * count / 3 - start)) {
+                p[k] = 255;
+            }
+            break;
+        }
+        default:
+            p[0] = r; p[1] = g; p[2] = b;
+        }
+        sum += p[0] + p[1] + p[2];
+    }
+    last_cap = capped(sum, lvl);
+    for (int i = 0; i < count; i++) {
+        pixel(i, fb[i][0] * last_cap / 255, fb[i][1] * last_cap / 255, fb[i][2] * last_cap / 255);
+    }
+    led_strip_refresh(strip);
 }
