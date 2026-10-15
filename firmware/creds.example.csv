@@ -1,0 +1,14 @@
+# Wi-Fi and MQTT settings live in NVS, not in the code. Copy this file somewhere outside the
+# repo, fill it in, then build and flash it to the nvs partition:
+#   python $IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py generate creds.csv creds.bin 0x6000
+#   esptool --chip esp32c6 -p /dev/cu.usbmodem2101 write-flash 0x9000 creds.bin
+# The same values can be set over BLE instead: "wifi SSID PASSWORD" and "mqtt URL USER PASSWORD".
+key,type,encoding,value
+cfg,namespace,,
+ssid,data,string,YourNetwork
+pass,data,string,YourPassword
+mqtt_url,data,string,mqtts://broker.example.com:8883
+mqtt_user,data,string,ledify
+mqtt_pass,data,string,YourBrokerPassword
+count,data,u8,30
+type,data,string,ws2812

@@ -84,33 +84,34 @@ Designed in KiCad with attention to RF design and high current power delivery. T
 
 ## Firmware
 
-The boilerplate in [`firmware/main.py`](firmware/main.py) is written in MicroPython. It advertises over Bluetooth as `Ledify` with the Nordic UART service, so any BLE UART app (nRF Connect, Bluefruit Connect) can control the strip.
+The firmware in [`firmware/`](firmware/) is an ESP-IDF v6.1 project with drivers for everything on the board: USB-PD negotiation on the FUSB302B, the LED strip, the light sensor, IMU, barometer and microphone. It takes the same text commands from three places: the USB serial console, Bluetooth (it advertises as `Ledify` with the Nordic UART service, so nRF Connect or Bluefruit Connect work) and MQTT. Point it at a Wi-Fi network and a broker and it shows up in Home Assistant on its own as a light with four effects plus illuminance, temperature, pressure and sound sensors.
 
-| Command     | Action                                      |
-| ----------- | ------------------------------------------- |
-| `on`        | Turns on the LED buck                       |
-| `off`       | Clears the strip and turns off the LED buck |
-| `rgb R G B` | Fills the strip with a color (0-255 each)   |
-| `volt 5`    | Selects 5V, turns the output off first      |
-| `volt 12`   | Selects 12V, turns the output off first     |
+| Command               | Action                                                                 |
+| --------------------- | ---------------------------------------------------------------------- |
+| `on` / `off`          | LED buck on or off                                                     |
+| `rgb R G B`           | Fills the strip with a color (0-255 each)                              |
+| `level N`             | Brightness cap (0-255)                                                 |
+| `count N`             | How many pixels to drive                                               |
+| `type ws2812`         | Chip type: `ws2812` (B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w`, `ws2816` |
+| `mode solid`          | Holds the color                                                        |
+| `mode rainbow`        | Animated rainbow                                                       |
+| `mode sound`          | Brightness follows the microphone                                      |
+| `mode auto`           | Brightness follows the ambient light sensor                            |
+| `volt 5` / `volt 12`  | Selects the output voltage, turns the output off first. 12V needs a 15V+ PD contract |
+| `status`              | JSON with the PD contract, network state, lux, temperature, pressure, motion and sound level |
+| `pd` / `net`          | The charger's offered voltages / Wi-Fi and MQTT state                  |
+| `wifi SSID PASS`      | Saves the Wi-Fi credentials and restarts                               |
+| `mqtt URL USER PASS`  | Saves the broker and restarts                                          |
 
-The output always boots at 5V and off. Set `NUM_LEDS` and `MAX_LEVEL` at the top of the file for your strip.
+The output always boots at 5V and off, and the board asks the charger for the highest voltage up to 20V as soon as it starts. Credentials, the strip length and the chip type are stored in the ESP32's NVS partition, never in the code. SIG is 3.3V logic going to the strip's DIN; the wiring notes, MQTT topics and the Mosquitto-on-Railway broker setup are in [`firmware/README.md`](firmware/README.md).
 
-### Flashing
-
-1. Flash the [MicroPython ESP32-C6 firmware](https://micropython.org/download/ESP32_GENERIC_C6/) over USB with `esptool`
-2. Copy the boilerplate to the board:
-
-```bash
-mpremote cp firmware/main.py :main.py
-```
-
-3. Press RST and connect to `Ledify` over Bluetooth
-
-To run the parser self-check on your computer:
+### Building and flashing
 
 ```bash
-python3 firmware/main.py
+cd firmware
+source ~/.espressif/tools/activate_idf_v6.1.sh
+idf.py build
+idf.py -p /dev/cu.usbmodem2101 flash monitor
 ```
 
 ## Credits
