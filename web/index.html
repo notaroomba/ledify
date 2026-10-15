@@ -39,14 +39,14 @@
 </style>
 </head>
 <body>
-<header><h1>LEDIFY</h1><span id="conn" class="pill">not connected</span></header>
+<header><h1>LEDIFY</h1><span class="row"><button id="showlogin" style="padding:4px 10px;font-size:12px">Broker</button><span id="conn" class="pill">not connected</span></span></header>
 <main>
   <section class="card" id="login">
     <h2>Broker</h2>
     <div class="row"><label>URL</label><input id="url" style="flex:1;min-width:220px" value="wss://mosquitto-production-595e.up.railway.app"></div>
     <div class="row" style="margin-top:8px"><label>User</label><input id="user" value="ledify"></div>
     <div class="row" style="margin-top:8px"><label>Password</label><input id="pass" type="password" autocomplete="current-password"></div>
-    <div class="row" style="margin-top:10px"><button class="primary" id="connect">Connect</button><span class="muted" id="loginmsg">Saved in this browser only.</span></div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="connect">Connect</button><button id="usebuiltin">Use the site's broker</button><span class="muted" id="loginmsg">Only needed for a different broker; saved in this browser.</span></div>
   </section>
 
   <div id="app" hidden>
@@ -130,6 +130,8 @@ const $ = id => document.getElementById(id);
 const EFFECTS = ['solid', 'rainbow', 'temp', 'spectrum', 'meter', 'sound', 'vu', 'pulse'];
 const OVERLAYS = ['none', 'vu', 'pulse'];
 const devices = {};
+// The password is filled in at deploy time from the broker service's variable; "__MQTT_PASS__" means a local copy.
+const BUILT_IN = { url: 'wss://mosquitto-production-595e.up.railway.app', user: 'ledify', pass: '__MQTT_PASS__' };
 let client, current, dragging = false;
 
 function log(s) { const l = $('log'); l.textContent = (new Date().toLocaleTimeString() + '  ' + s + '\n' + l.textContent).slice(0, 4000); }
@@ -151,12 +153,12 @@ function connect(c) {
   client = mqtt.connect(c.url, { username: c.user, password: c.pass, keepalive: 30, reconnectPeriod: 2000, clientId: 'panel-' + Math.random().toString(16).slice(2, 8) });
   client.on('connect', () => {
     $('conn').textContent = 'connected'; $('conn').className = 'pill on';
-    localStorage.setItem('ledify.creds', JSON.stringify(c));
+    if (c !== BUILT_IN) localStorage.setItem('ledify.creds', JSON.stringify(c));
     $('login').hidden = true; $('app').hidden = false;
     client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live']);
     keepLive();
   });
-  client.on('error', e => { $('loginmsg').textContent = 'Broker said: ' + e.message; $('conn').textContent = 'error'; $('conn').className = 'pill off'; });
+  client.on('error', e => { $('loginmsg').textContent = 'Broker said: ' + e.message; $('conn').textContent = 'error'; $('conn').className = 'pill off'; $('login').hidden = false; });
   client.on('close', () => { $('conn').textContent = 'reconnecting'; $('conn').className = 'pill off'; });
   client.on('message', (topic, payload) => {
     const m = topic.match(/^ledify\/([^/]+)\/(.+)$/); if (!m) return;
@@ -171,10 +173,16 @@ function connect(c) {
     if (id === current) render(d, what);
   });
 }
-$('connect').onclick = () => connect(creds());
-$('disconnect').onclick = () => { localStorage.removeItem('ledify.creds'); location.reload(); };
+$('connect').onclick = () => { localStorage.setItem('ledify.override', '1'); connect(creds()); };
+$('disconnect').onclick = () => { localStorage.removeItem('ledify.creds'); localStorage.removeItem('ledify.override'); location.reload(); };
+$('usebuiltin').onclick = $('disconnect').onclick;
+$('showlogin').onclick = () => { $('login').hidden = !$('login').hidden; };
 const saved = localStorage.getItem('ledify.creds');
-if (saved) { const c = JSON.parse(saved); $('url').value = c.url; $('user').value = c.user; $('pass').value = c.pass; connect(c); }
+if (saved && localStorage.getItem('ledify.override')) {
+  const c = JSON.parse(saved); $('url').value = c.url; $('user').value = c.user; $('pass').value = c.pass; $('login').hidden = true; connect(c);
+} else if (!BUILT_IN.pass.startsWith('__')) {
+  $('login').hidden = true; connect(BUILT_IN);        // the normal case: the site knows its own broker
+}
 
 // ---- rendering
 function renderDevices() {
