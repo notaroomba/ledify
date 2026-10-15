@@ -143,8 +143,9 @@ static QueueHandle_t cmd_q;
 static int16_t gain = 25, lux_lo = 0, lux_hi = 500, night = 0, temp_lo = 15, temp_hi = 30;
 static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
+static int16_t pddelay = PD_START_DELAY_MS;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -154,6 +155,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"temp_hi", &temp_hi, -40, 100},
     {"limit", &limit, 0, 1},                 // 1 = dim to the power budget, 0 = send what was asked and warn
     {"pdmax", &pdmax, 5000, 20000},          // highest PD voltage to request, in mV
+    {"pddelay", &pddelay, 0, 30000},         // ms after boot before the board talks PD (experiments with picky chargers)
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -756,7 +758,7 @@ void app_main(void)
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);
     ESP_LOGI(TAG, "leds up, %d x %s", leds_get_count(), leds_type_name());
-    vTaskDelay(pdMS_TO_TICKS(PD_START_DELAY_MS));
+    vTaskDelay(pdMS_TO_TICKS(pddelay));
     pd_init(bus);
     sensors_init(bus);
     have_mic = mic_init();
