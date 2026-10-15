@@ -26,7 +26,7 @@ static volatile uint16_t rms;  // Q15, latest block
 static volatile uint8_t loud, pulse, bands[3];
 static uint32_t peak, bpeak[3];
 static int32_t avg;
-static uint32_t floor_;        // running noise floor of x: drops at once, climbs slowly
+static uint32_t floor_q;       // running noise floor of x in 1/256 steps, so small signals still move it
 static int hold, nblock;
 static volatile uint32_t block_max_us, drops;   // real-time check, read and reset by mic_stats()
 static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
@@ -51,11 +51,13 @@ static void block(void)
     }
     rms = (uint32_t)sqrtf((float)(acc / N)) >> 8;
     uint32_t x = (uint32_t)rms * gain;
-    if (x < floor_) {
-        floor_ -= (floor_ - x) >> 4;                           // the floor is a smoothed lower envelope of x:
+    uint32_t xq = x << 8;
+    if (xq < floor_q) {
+        floor_q -= (floor_q - xq) >> 4;                        // the floor is a smoothed lower envelope of x:
     } else {
-        floor_ += (x - floor_) >> 9;                           // drops in ~0.1 s, climbs over ~4 s
+        floor_q += (xq - floor_q) >> 9;                        // drops in ~0.1 s, climbs over ~4 s
     }
+    uint32_t floor_ = floor_q >> 8;
     uint32_t sig = x > floor_ * 2 ? x - floor_ * 2 : 0;           // only what sticks out 6 dB above the floor is sound
     peak = sig > peak ? sig : peak - (peak >> PEAK_DECAY);
     uint32_t ref = peak > floor_ * 2 + 64 ? peak : floor_ * 2 + 64;   // normalise to the recent peak, never to the noise itself
