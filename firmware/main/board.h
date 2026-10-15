@@ -20,6 +20,7 @@
 
 #define NUM_LEDS      300   // pixels driven until "count" is set
 #define MAX_LEDS     1000   // most the firmware will drive (3 KB pixel buffer, 30 ms per frame)
+#define FRAME_MS       33   // live styles redraw at 30 fps; 300 pixels take 9 ms of that on the wire
 #define LED_MW_PER_CHANNEL 100   // one colour at full on one pixel; ponytail: tune per strip if the cap is off
 #define LED_BUDGET_NO_PD_MW 7500 // no PD contract: assume a 5 V 1.5 A port
 #define LED_BUCK_MAX_MA 10000    // LM61495 output limit

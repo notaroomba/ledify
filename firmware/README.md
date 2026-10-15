@@ -4,16 +4,17 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 
 | File | Does |
 | --- | --- |
-| `main/main.c` | Startup, the command handler, LED mode loop, USB serial console |
+| `main/main.c` | Startup, the command handler, the frame loop that composes colour × brightness × overlay, USB serial console |
 | `main/pd.c` | USB-PD sink on the FUSB302B: requests the highest fixed voltage up to 20 V |
-| `main/leds.c` | Addressable strip over RMT (WS2812 family, WS2811, SK6812, WS2816), buck enable, 5 V / 12 V select |
+| `main/leds.c` | Addressable strip over RMT (WS2812 family, WS2811, SK6812, WS2816), the colour sources, the power cap, buck enable, 5 V / 12 V select |
 | `main/sensors.c` | OPT4001 light sensor (I2C), BMI323 IMU and BMP581 barometer (SPI) |
-| `main/mic.c` | ICS-43434 microphone over I2S, returns an RMS level |
+| `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble |
+| `main/fft.c` | 256-point fixed-point FFT and the band sums, plain C (`test/fft_test.c` checks it on the host) |
 | `main/ble.c` | Nordic UART service on NimBLE |
 | `main/net.c` | Wi-Fi station, MQTT client, Home Assistant discovery |
-| `main/board.h` | Pin map and tunables (pixel limits, power budget, PD voltage, LED power settle time) |
+| `main/board.h` | Pin map and tunables (pixel limits, frame rate, power budget, PD voltage, LED power settle time) |
 | `partitions.csv` | 16 MB flash: 24 KB NVS for settings, 4 MB app |
-| `creds.example.csv` | Template for the NVS settings image (Wi-Fi, broker, strip) |
+| `creds.example.csv` | Template for the NVS settings image (Wi-Fi, broker, strip, lighting tunables) |
 
 ## Build and flash
 
@@ -36,12 +37,18 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `level N` | Brightness cap, 0-255 |
 | `count N` | How many pixels are driven, 1-1000 (`MAX_LEDS`). Saved. Also a slider in Home Assistant |
 | `type ws2812` | Chip type: `ws2812` (also B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w` (RGBW), `ws2816`. Saved |
-| `mode solid` | Hold the colour |
-| `mode rainbow` | Animated rainbow |
-| `mode sound` | Brightness follows the microphone |
-| `mode auto` | Brightness follows the light sensor |
+| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
+| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter` (see [Mixing styles](#mixing-styles)) |
+| `bright level` / `bright sound` | Brightness source: the fixed `level`, or `level` scaled by the microphone |
+| `overlay none` / `vu` / `pulse` | Light only as many pixels as the sound level, or flash on beats |
+| `auto on` / `auto off` | Scale the brightness with the light sensor between `lux_lo` and `lux_hi`, off under `night` |
+| `gain N` | Microphone gain 1-100, default 25: how much a quiet room is amplified. Saved |
+| `lux LO HI` | Lux at which auto brightness sits at its floor and reaches full, default `0 500`. Saved; also one at a time as `lux_lo N` / `lux_hi N` |
+| `night N` | Lux below which auto brightness turns the strip off, 0 (default) disables. Saved |
+| `temp LO HI` | °C shown as blue and as red by the `temp` colour, white halfway, default `15 30`. Saved; also `temp_lo N` / `temp_hi N` |
+| `temp 21.5` | Feed a temperature in; the `temp` colour uses it instead of the barometer until the next restart |
 | `volt 5` / `volt 12` | Select the output voltage. 12 V needs a PD contract of 15 V or more, and the output turns off first |
-| `status` | JSON with power state, strip settings, the brightness cap, PD contract, network state, lux, temperature, pressure, accel, gyro and sound level |
+| `status` | JSON with power state, strip settings, colour/brightness/overlay, the saved tunables, the brightness cap, PD contract, network state, lux, temperature, pressure, accel, gyro, sound level and loudness after gain |
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
@@ -49,13 +56,53 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
 | `help` | Command list |
 
-Replies go to the log and, over BLE, to the TX characteristic. Every peripheral is probed at startup and skipped if it doesn't answer, so a board with a missing sensor still runs.
+Replies go to the log and, over BLE, to the TX characteristic. Every peripheral is probed at startup and skipped if it doesn't answer, so a board with a missing sensor still runs; sound styles on a board without a microphone answer `ok, no mic` and stay dark.
+
+## Mixing styles
+
+Every frame is **colour × brightness × overlay**. `main.c` composes the three from the sensors and `leds_frame()` in `leds.c` draws it; that is the only path to the strip, so the power cap applies to every style. Each part has its own command, and `mode` is a preset over them.
+
+| Colour source | What each pixel shows |
+| --- | --- |
+| `solid` | The `rgb` colour |
+| `rainbow` | A hue sweep drifting along the strip |
+| `temp` | One colour from blue at `temp_lo` through white to red at `temp_hi`, from the barometer or a fed-in `temp` |
+| `spectrum` | Three bars, red / green / blue, whose lengths follow bass / mid / treble |
+| `meter` | Green to yellow to red along the strip, the classic VU colours |
+
+| Brightness | What happens to `level` |
+| --- | --- |
+| `bright level` | Used as is |
+| `auto on` | Scaled between a floor of 20/255 at `lux_lo` and full at `lux_hi`; 0 below `night`, back on above twice `night` |
+| `bright sound` | Multiplied by the loudness |
+
+| Overlay | |
+| --- | --- |
+| `none` | |
+| `vu` | Only the first `loudness × count` pixels are lit |
+| `pulse` | Full brightness on each beat, a quarter in between |
+
+They stack: `color rainbow`, `auto on`, `overlay vu` is a rainbow VU meter that dims in a dark room. The presets map onto the three like this:
+
+| `mode` / Home Assistant effect | colour | bright | overlay |
+| --- | --- | --- | --- |
+| `solid`, `rainbow`, `temp`, `spectrum`, `meter` | that one | `level` | `none` |
+| `sound` | unchanged | `sound` | `none` |
+| `vu` | `meter` | `level` | `vu` |
+| `pulse` | unchanged | `level` | `pulse` |
+| `auto` | unchanged | unchanged, turns `auto` on | unchanged |
+
+`auto` stays out of the presets so it survives switching effects; in Home Assistant it is the "auto brightness" switch.
+
+### Sound processing
+
+A microphone task reads 256 samples (8 ms) at a time at 32 kHz, so the main loop never waits for audio. Per block: RMS × `gain`, held under a peak follower with a 2 s decay, gives the loudness, so a quiet room stays dark at a given gain while a loud room isn't pinned at 100 %. A beat is a block more than 1.5× its 1 s running average, at most one per 100 ms. Every fourth block the last 16 ms, decimated to 16 kHz, go through a Hann window and the fixed-point FFT in `fft.c` (62.5 Hz bins: bass 1-3, mid 4-31, treble 32-127), each band normalised against its own peak. `status` shows `sound` (raw RMS, 0-1) and `loud` (0-255 after gain) for tuning `gain`. Styles that move redraw every `FRAME_MS` (33 ms, about 9 ms of which is the wire time for 300 pixels); still ones once a second.
 
 ## Wiring the strip
 
 The three pads are VCC, SIG and GND. SIG goes to the strip's **DIN** (data in; the arrows printed on the strip point away from the board). Each pixel regenerates the signal on its DOUT for the next one, so a strip's DOUT end is only for chaining another strip. WS2815 also has a backup input BI; tie the first pixel's BI to GND.
 
-SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which normally works over a short lead but is out of spec, so if a strip stays dark while VCC is present either put a level shifter (74AHCT125) on SIG or feed the first pixel's VCC through a diode so it sits at about 4.3 V. The board waits `LED_POWER_SETTLE_MS` after enabling the buck before sending the first frame and resends the solid colour once a second, so pixels that powered up late still catch it.
+SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which normally works over a short lead but is out of spec, so if a strip stays dark while VCC is present either put a level shifter (74AHCT125) on SIG or feed the first pixel's VCC through a diode so it sits at about 4.3 V. The board waits `LED_POWER_SETTLE_MS` after enabling the buck before sending the first frame and resends a still frame once a second, so pixels that powered up late still catch it.
 
 ## Power budget
 
@@ -63,7 +110,7 @@ A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a lapt
 
 ## Wi-Fi, MQTT and Home Assistant
 
-Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `ssid2`, `pass2`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
+Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `ssid2`, `pass2`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`, and the tunables `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
 
 The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3ed08`.
 
@@ -71,14 +118,67 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | --- | --- | --- |
 | `ledify/<id>/cmd` | in | Any text command from the table above |
 | `ledify/<id>/light/set` | in | Home Assistant JSON light: `{"state":"ON","brightness":128,"color":{"r":255,"g":0,"b":0},"effect":"rainbow"}` |
-| `ledify/<id>/count/set` | in | Pixel count as a number, from the Home Assistant slider |
-| `ledify/<id>/type/set` | in | Chip type name, from the Home Assistant select |
+| `ledify/<id>/KEY/set` | in | A bare value, run as the command `KEY value`. The Home Assistant entities use `count`, `type`, `auto` (`ON`/`OFF`), `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`; `temp` feeds a temperature in for the `temp` colour |
 | `ledify/<id>/light/state` | out | JSON light state |
 | `ledify/<id>/state` | out | Same JSON as `status` |
 | `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}` (kPa, approximate dB SPL) |
 | `ledify/<id>/status` | out | `online` / `offline`, retained, set by the last will |
 
-State is published after every command and every 30 s. On connect the board sends retained discovery messages under `homeassistant/`, so with Home Assistant's MQTT integration pointed at the same broker a light (with the four modes as effects), a pixel-count slider, a chip-type select and illuminance, temperature, pressure and sound sensors appear by themselves.
+State is published after every command and every 30 s. On connect the board sends retained discovery messages under `homeassistant/`, so with Home Assistant's MQTT integration pointed at the same broker these appear by themselves: a light with the presets as effects (`solid`, `rainbow`, `temp`, `spectrum`, `meter`, `sound`, `vu`, `pulse`), an "auto brightness" switch, one number entity per saved value (pixels, gain, lux low, lux high, night lux, temp low, temp high), a chip-type select, and illuminance, temperature, pressure and sound sensors.
+
+### Automations
+
+Three examples that combine the pieces. The board id is `ledify_d3ed08` here; entity ids come from the names above.
+
+```yaml
+# Sunset: temperature colours at 40 %, fed from the weather integration instead of the warm on-board sensor
+- alias: Ledify sunset
+  triggers:
+    - trigger: sun
+      event: sunset
+  actions:
+    - action: light.turn_on
+      target:
+        entity_id: light.ledify
+      data:
+        effect: temp
+        brightness_pct: 40
+    - action: mqtt.publish
+      data:
+        topic: ledify/ledify_d3ed08/temp/set
+        payload: "{{ state_attr('weather.home', 'temperature') }}"
+
+# Dark room for two minutes: off. (The "night lux" number does the same on the board, without Home Assistant.)
+- alias: Ledify lights out
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.ledify_illuminance
+      below: 5
+      for: "00:02:00"
+  actions:
+    - action: light.turn_off
+      target:
+        entity_id: light.ledify
+
+# Party mode: spectrum bars with the gain set for the room
+- alias: Ledify party
+  triggers:
+    - trigger: state
+      entity_id: input_boolean.party_mode
+      to: "on"
+  actions:
+    - action: number.set_value
+      target:
+        entity_id: number.ledify_gain
+      data:
+        value: 20
+    - action: light.turn_on
+      target:
+        entity_id: light.ledify
+      data:
+        effect: spectrum
+        brightness: 255
+```
 
 ### Broker and Home Assistant on Railway
 

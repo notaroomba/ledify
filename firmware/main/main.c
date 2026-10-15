@@ -2,10 +2,18 @@
 //
 // Text commands (USB serial console, BLE UART app, or MQTT topic ledify/<id>/cmd):
 //   on | off | rgb R G B | level N | count N | type ws2812|ws2811|sk6812|sk6812w|ws2816
-//   mode solid|rainbow|sound|auto
+//   mode solid|rainbow|temp|spectrum|meter|sound|vu|pulse|auto     presets, the Home Assistant effects
+//   color solid|rainbow|temp|spectrum|meter | bright level|sound | overlay none|vu|pulse | auto on|off
+//   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
+//   temp 21.5                                      feed a temperature in for the temp colour
 //   volt 5 | volt 12 | status | pd | net | help
 //   wifi SSID PASSWORD | wifi2 SSID PASSWORD | mqtt URL [USER PASSWORD]   (saved to NVS, then the board restarts)
 // Home Assistant talks JSON to ledify/<id>/light/set; see net.c for the topics.
+//
+// A frame is colour x brightness x overlay, drawn by leds_frame():
+//   colour      solid | rainbow | temp (blue-white-red from the temperature) | spectrum (bass/mid/treble bars) | meter
+//   brightness  level, scaled by the lux curve when auto is on, by the microphone when bright is sound
+//   overlay     none | vu (lit length follows the sound) | pulse (flash on each beat, a quarter in between)
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -31,18 +39,38 @@
 
 static const char *TAG = "ledify";
 
-#define SOUND_GAIN 25.0f      // ponytail: fixed gain, make it a command if rooms differ a lot
+#define AUTO_FLOOR 20          // brightness at lux_lo and below when auto is on
+#define PULSE_FLOOR 64         // brightness between beats, out of 255
 
-typedef enum { MODE_SOLID, MODE_RAINBOW, MODE_SOUND, MODE_AUTO } led_mode_t;
-static const char *mode_names[] = {"solid", "rainbow", "sound", "auto"};
+typedef enum { OVER_NONE, OVER_VU, OVER_PULSE } overlay_t;
+static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter"};
+static const char *overlay_names[] = {"none", "vu", "pulse"};
+#define MODES "solid|rainbow|temp|spectrum|meter|sound|vu|pulse|auto"
 
-static led_mode_t mode = MODE_SOLID;
+static leds_color_t color;
+static overlay_t overlay;
+static bool sound_on, auto_on, dark;        // dark: under the night threshold
+static int lux = -1;                        // latest reading, -1 without a sensor
+static float temp_in;                       // fed in over MQTT; the barometer's until then. ponytail: never expires, add a timeout if Home Assistant going away should fall back
+static bool have_temp_in;
 static bool power;
 static int volt = 5;
 static bool have_mic;
 static QueueHandle_t cmd_q;
 
-// Strip length and chip type live in NVS next to the Wi-Fi credentials (namespace "cfg").
+// Saved tunables. The key is the command, the Home Assistant topic ledify/<id>/<key>/set and the status field.
+static int16_t gain = 25, lux_lo = 0, lux_hi = 500, night = 0, temp_lo = 15, temp_hi = 30;
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, N_SETTINGS };
+static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
+    {"gain", &gain, 1, 100},
+    {"lux_lo", &lux_lo, 0, 10000},
+    {"lux_hi", &lux_hi, 1, 20000},
+    {"night", &night, 0, 1000},
+    {"temp_lo", &temp_lo, -40, 100},
+    {"temp_hi", &temp_hi, -40, 100},
+};
+
+// Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
 static void save_count(uint16_t n)
 {
     nvs_handle_t h;
@@ -64,6 +92,16 @@ static void save_type(const char *t)
     }
 }
 
+static void save_i16(const char *key, int16_t v)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i16(h, key, v);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
 static void load_cfg(void)
 {
     nvs_handle_t h;
@@ -77,8 +115,12 @@ static void load_cfg(void)
         if (nvs_get_u16(h, "count", &n) == ESP_OK) {
             leds_set_count(n);
         }
+        for (int i = 0; i < N_SETTINGS; i++) {
+            nvs_get_i16(h, settings[i].key, settings[i].val);
+        }
         nvs_close(h);
     }
+    mic_set_gain(gain);
 }
 
 // Commands typed on the USB serial console (idf.py monitor). Without the USB-Serial-JTAG driver installed,
@@ -120,18 +162,134 @@ static void reply(const char *s)
     ble_send(s);
 }
 
-static bool set_mode(const char *name)
+static int lookup(const char *name, const char *const *names, int n)
 {
-    for (int i = 0; i < 4; i++) {
-        if (!strcasecmp(name, mode_names[i])) {
-            if (i == MODE_SOUND && !have_mic) {
-                return false;
-            }
-            mode = i;
-            return true;
+    for (int i = 0; i < n; i++) {
+        if (!strcasecmp(name, names[i])) {
+            return i;
         }
     }
-    return false;
+    return -1;
+}
+
+static bool uses_mic(void)
+{
+    return sound_on || overlay != OVER_NONE || color == COLOR_SPECTRUM;
+}
+
+static const char *mic_note(void)
+{
+    return uses_mic() && !have_mic ? "ok, no mic" : "ok";
+}
+
+// What Home Assistant sees as the effect: the overlay if there is one, else sound, else the colour source.
+static const char *effect_name(void)
+{
+    return overlay != OVER_NONE ? overlay_names[overlay] : sound_on ? "sound" : color_names[color];
+}
+
+// Presets: a colour resets the rest, vu brings its meter colours, sound and pulse keep whatever colour is
+// showing. auto is the old name for the lux modifier.
+static bool set_mode(const char *name)
+{
+    int c = lookup(name, color_names, 5);
+    if (c >= 0) {
+        color = c;
+        sound_on = false;
+        overlay = OVER_NONE;
+    } else if (!strcasecmp(name, "sound")) {
+        sound_on = true;
+        overlay = OVER_NONE;
+    } else if (!strcasecmp(name, "vu")) {
+        color = COLOR_METER;
+        overlay = OVER_VU;
+        sound_on = false;
+    } else if (!strcasecmp(name, "pulse")) {
+        overlay = OVER_PULSE;
+        sound_on = false;
+    } else if (!strcasecmp(name, "auto")) {
+        auto_on = true;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static int setting_idx(const char *key)
+{
+    for (int i = 0; i < N_SETTINGS; i++) {
+        if (!strcmp(key, settings[i].key)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool set_setting(int i, int v)
+{
+    if (v < settings[i].lo || v > settings[i].hi) {
+        return false;
+    }
+    *settings[i].val = v;
+    save_i16(settings[i].key, v);
+    mic_set_gain(gain);
+    return true;
+}
+
+// Auto brightness: AUTO_FLOOR at lux_lo and below, lvl at lux_hi and above, off under the night threshold
+// (back on above twice it, so the strip's own light can't toggle it).
+static uint8_t lux_level(uint8_t lvl)
+{
+    if (lux < 0) {
+        return lvl;
+    }
+    dark = night && (lux < night || (dark && lux < 2 * night));
+    if (dark) {
+        return 0;
+    }
+    int f = lux_hi > lux_lo ? (lux - lux_lo) * 255 / (lux_hi - lux_lo) : 255;
+    f = f < 0 ? 0 : f > 255 ? 255 : f;
+    int floor = lvl < AUTO_FLOOR ? lvl : AUTO_FLOOR;
+    return floor + (lvl - floor) * f / 255;
+}
+
+// Lux for the auto curve and the temperature behind the temp colour.
+static void sense(void)
+{
+    sensor_data_t d;
+    sensors_read(&d);
+    lux = d.have_lux ? (int)d.lux : -1;
+    float t = have_temp_in ? temp_in : d.have_baro ? d.temp_c : (temp_lo + temp_hi) / 2.0f;
+    int pos = temp_hi > temp_lo ? (int)((t - temp_lo) * 255 / (temp_hi - temp_lo)) : 128;
+    leds_set_temp(pos < 0 ? 0 : pos > 255 ? 255 : pos);
+}
+
+// Compose and send one frame.
+static void frame(void)
+{
+    if (!power) {
+        return;
+    }
+    uint8_t bands[3];
+    mic_bands(bands);
+    int lvl = leds_get_level();
+    if (auto_on) {
+        lvl = lux_level(lvl);
+    }
+    if (sound_on) {
+        lvl = lvl * mic_loud() / 255;
+    }
+    if (overlay == OVER_PULSE) {
+        lvl = lvl * (PULSE_FLOOR + (255 - PULSE_FLOOR) * mic_pulse() / 255) / 255;
+    }
+    int count = leds_get_count();
+    leds_frame(color, lvl, overlay == OVER_VU ? count * mic_loud() / 255 : count, bands);
+}
+
+// Styles that move redraw every FRAME_MS; a still frame only needs the once-a-second resend.
+static bool live(void)
+{
+    return color == COLOR_RAINBOW || uses_mic();
 }
 
 static void status(char *out, size_t n)
@@ -141,22 +299,30 @@ static void status(char *out, size_t n)
     const pd_state_t *pd = pd_get();
     char net[96];
     net_status(net, sizeof net);
-    int w = snprintf(out, n, "{\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"level\":%d,\"count\":%d,\"type\":\"%s\",\"cap\":%d,"
-                     "\"pd\":{\"attached\":%d,\"ready\":%d,\"mv\":%d,\"ma\":%d},\"net\":\"%s\"",
-                     power, volt, mode_names[mode], leds_get_level(), leds_get_count(), leds_type_name(), leds_get_cap(),
-                     pd->cc != 0, pd->ready, pd->contract_mv, pd->contract_ma, net);
+    int w = snprintf(out, n, "{\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"color\":\"%s\",\"bright\":\"%s\",\"overlay\":\"%s\","
+                     "\"auto\":%d,\"level\":%d,\"count\":%d,\"type\":\"%s\",\"cap\":%d",
+                     power, volt, effect_name(), color_names[color], sound_on ? "sound" : "level", overlay_names[overlay],
+                     auto_on, leds_get_level(), leds_get_count(), leds_type_name(), leds_get_cap());
+    for (int i = 0; i < N_SETTINGS; i++) {
+        w += snprintf(out + w, n - w, ",\"%s\":%d", settings[i].key, *settings[i].val);
+    }
+    w += snprintf(out + w, n - w, ",\"pd\":{\"attached\":%d,\"ready\":%d,\"mv\":%d,\"ma\":%d},\"net\":\"%s\"",
+                  pd->cc != 0, pd->ready, pd->contract_mv, pd->contract_ma, net);
     if (d.have_lux) {
         w += snprintf(out + w, n - w, ",\"lux\":%.1f", d.lux);
     }
     if (d.have_baro) {
         w += snprintf(out + w, n - w, ",\"temp_c\":%.2f,\"pressure_pa\":%.0f", d.temp_c, d.pressure_pa);
     }
+    if (have_temp_in) {
+        w += snprintf(out + w, n - w, ",\"temp_in\":%.2f", temp_in);
+    }
     if (d.have_imu) {
         w += snprintf(out + w, n - w, ",\"acc\":[%.2f,%.2f,%.2f],\"gyr\":[%.1f,%.1f,%.1f]",
                       d.acc[0], d.acc[1], d.acc[2], d.gyr[0], d.gyr[1], d.gyr[2]);
     }
     if (have_mic) {
-        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f", mic_db());
+        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f,\"loud\":%d", mic_db(), mic_loud());
     }
     snprintf(out + w, n - w, "}");
 }
@@ -167,12 +333,12 @@ static void publish(void)
     if (!net_mqtt_connected()) {
         return;
     }
-    char light[160], st[400], sens[160];
+    static char light[160], st[640], sens[160];
     uint8_t r, g, b;
     leds_get_color(&r, &g, &b);
     snprintf(light, sizeof light,
              "{\"state\":\"%s\",\"brightness\":%d,\"color_mode\":\"rgb\",\"color\":{\"r\":%d,\"g\":%d,\"b\":%d},\"effect\":\"%s\"}",
-             power ? "ON" : "OFF", leds_get_level(), r, g, b, mode_names[mode]);
+             power ? "ON" : "OFF", leds_get_level(), r, g, b, effect_name());
     status(st, sizeof st);
     sensor_data_t d;
     sensors_read(&d);
@@ -216,18 +382,16 @@ static void handle_json(const char *text)
 {
     char str[16];
     int v, r, g, b;
+    const char *c = strstr(text, "\"color\":");
+    if (c && json_num(c, "r", &r) && json_num(c, "g", &g) && json_num(c, "b", &b)) {
+        color = COLOR_SOLID;                  // a picked colour means show that colour
+        leds_fill(r & 255, g & 255, b & 255);
+    }
     if (json_str(text, "effect", str, sizeof str)) {
         set_mode(str);
     }
     if (json_num(text, "brightness", &v)) {
         leds_set_level(v < 0 ? 0 : v > 255 ? 255 : v);
-    }
-    const char *color = strstr(text, "\"color\":");
-    if (color && json_num(color, "r", &r) && json_num(color, "g", &g) && json_num(color, "b", &b)) {
-        if (mode == MODE_RAINBOW) {
-            mode = MODE_SOLID;
-        }
-        leds_fill(r & 255, g & 255, b & 255);
     }
     if (json_str(text, "state", str, sizeof str)) {
         power = !strcasecmp(str, "ON");
@@ -262,7 +426,8 @@ static void handle(char *line)
             *p = tolower((unsigned char)*p);
         }
     }
-    char out[400];
+    static char out[640];
+    int s = setting_idx(tok[0]);
 
     if (!strcmp(tok[0], "on") && n == 1) {
         power = true;
@@ -278,9 +443,7 @@ static void handle(char *line)
             reply("err rgb 0-255");
             return;
         }
-        if (mode == MODE_RAINBOW) {
-            mode = MODE_SOLID;
-        }
+        color = COLOR_SOLID;
         leds_fill(r, g, b);
         reply("ok");
     } else if (!strcmp(tok[0], "level") && n == 2) {
@@ -309,7 +472,55 @@ static void handle(char *line)
         save_type(tok[1]);
         reply("ok");
     } else if (!strcmp(tok[0], "mode") && n == 2) {
-        reply(set_mode(tok[1]) ? "ok" : "err mode solid|rainbow|sound|auto");
+        reply(set_mode(tok[1]) ? mic_note() : "err mode " MODES);
+    } else if (!strcmp(tok[0], "color") && n == 2) {
+        int c = lookup(tok[1], color_names, 5);
+        if (c < 0) {
+            reply("err color " LED_COLORS);
+            return;
+        }
+        color = c;
+        reply(mic_note());
+    } else if (!strcmp(tok[0], "bright") && n == 2) {
+        if (strcmp(tok[1], "level") && strcmp(tok[1], "sound")) {
+            reply("err bright level|sound");
+            return;
+        }
+        sound_on = !strcmp(tok[1], "sound");
+        reply(mic_note());
+    } else if (!strcmp(tok[0], "overlay") && n == 2) {
+        int o = lookup(tok[1], overlay_names, 3);
+        if (o < 0) {
+            reply("err overlay none|vu|pulse");
+            return;
+        }
+        overlay = o;
+        reply(mic_note());
+    } else if (!strcmp(tok[0], "auto") && n == 2) {
+        if (strcmp(tok[1], "on") && strcmp(tok[1], "off")) {
+            reply("err auto on|off");
+            return;
+        }
+        auto_on = !strcmp(tok[1], "on");
+        reply("ok");
+    } else if (!strcmp(tok[0], "lux") && n == 3) {
+        reply(set_setting(S_LUX_LO, atoi(tok[1])) && set_setting(S_LUX_HI, atoi(tok[2])) ? "ok" : "err lux 0-10000 1-20000");
+    } else if (!strcmp(tok[0], "temp") && n == 3) {
+        reply(set_setting(S_TEMP_LO, atoi(tok[1])) && set_setting(S_TEMP_HI, atoi(tok[2])) ? "ok" : "err temp -40-100 -40-100");
+    } else if (!strcmp(tok[0], "temp") && n == 2) {
+        char *end;
+        float t = strtof(tok[1], &end);
+        if (*end) {
+            reply("err temp C");
+            return;
+        }
+        temp_in = t;
+        have_temp_in = true;
+        sense();
+        reply("ok");
+    } else if (s >= 0 && n == 2) {
+        snprintf(out, sizeof out, "err %s %d-%d", tok[0], settings[s].lo, settings[s].hi);
+        reply(set_setting(s, atoi(tok[1])) ? "ok" : out);
     } else if (!strcmp(tok[0], "volt") && n == 2) {
         int v = atoi(tok[1]);
         if (v != 5 && v != 12) {
@@ -352,8 +563,9 @@ static void handle(char *line)
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
     } else if (!strcmp(tok[0], "help")) {
-        reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<solid|rainbow|sound|auto> volt<5|12> status pd net "
-              "wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+        reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
+              "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
+              "volt<5|12> status pd net wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -397,49 +609,40 @@ void app_main(void)
     ble_init(cmd_q);
     net_init(cmd_q);
 
-    char snap[400];
+    static char snap[640];
     status(snap, sizeof snap);               // one snapshot in the log so sensors can be checked without BLE
     ESP_LOGI(TAG, "%s", snap);
 
-    int64_t last_anim = 0, last_lux = 0, last_beat = 0, last_pub = 0, last_frame = 0;
+    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0;
     cmd_t cmd;
     for (;;) {
         leds_set_budget_mw(power_budget_mw());
         if (xQueueReceive(cmd_q, &cmd, 0)) {
             handle(cmd.text);
+            frame();
             publish();
         }
         int64_t now = esp_timer_get_time();
+        if (now - last_sense > 500000) {
+            sense();
+            last_sense = now;
+        }
         if (now - last_beat > 3000000) {
             const pd_state_t *pd = pd_get();
             char net[96];
             net_status(net, sizeof net);
             ESP_LOGI(TAG, "up %llds, pd cc%d ready=%d %dmV/%dmA, ble %s, %s, power %d, mode %s",
                      now / 1000000, pd->cc, pd->ready, pd->contract_mv, pd->contract_ma,
-                     ble_connected() ? "connected" : "advertising", net, power, mode_names[mode]);
+                     ble_connected() ? "connected" : "advertising", net, power, effect_name());
             last_beat = now;
         }
         if (now - last_pub > 30000000) {
             publish();
             last_pub = now;
         }
-        if (power && mode == MODE_SOLID && now - last_frame > 1000000) {
-            leds_refresh();                             // pixels only latch while powered, so resend once a second
+        if (power && now - last_frame > (live() ? FRAME_MS * 1000 : 1000000)) {
+            frame();                                    // pixels only latch while powered, so still frames go out again once a second
             last_frame = now;
-        }
-        if (power && mode == MODE_RAINBOW && now - last_anim > 20000) {
-            leds_rainbow_step();
-            last_anim = now;
-        } else if (power && mode == MODE_SOUND) {
-            leds_scaled(mic_level() * SOUND_GAIN);      // reads 8 ms of audio
-        } else if (mode == MODE_AUTO && now - last_lux > 500000) {
-            sensor_data_t d;
-            sensors_read(&d);
-            if (d.have_lux) {
-                float l = 20 + d.lux / 2;               // 0 lux -> 20, 470 lux and up -> 255
-                leds_set_level(l > 255 ? 255 : (uint8_t)l);
-            }
-            last_lux = now;
         }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
