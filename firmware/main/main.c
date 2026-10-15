@@ -583,6 +583,10 @@ static void handle(char *line)
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
+    } else if (!strcmp(tok[0], "listen") && n == 2) {              // stream the mic to the panel
+        int s = atoi(tok[1]);
+        mic_listen(s < 0 ? 0 : s > 300 ? 300 : s);
+        reply("ok");
     } else if (!strcmp(tok[0], "micraw")) {                       // diagnostics on the live topic
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
@@ -607,7 +611,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12 yes> live<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "volt<5|12 yes> live<s> listen<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }

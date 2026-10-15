@@ -7,6 +7,7 @@
 //                          auto (ON/OFF), gain, lux_lo, lux_hi, night, temp_lo, temp_hi, temp (a reading in C)
 //   ledify/ID/light/state  JSON light state
 //   ledify/ID/state        full status JSON
+//   ledify/ID/audio        16 kHz 16-bit PCM while "listen N" is active (the panel plays it)
 //   ledify/ID/live         {"loud","bands","pulse","db","cap"} at 10 Hz while "live N" is active
 //   ledify/ID/audio/set    "L B M T P" loudness, bands and pulse from the panel (overrides the mic)
 //   ledify/ID/sensors      {"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}
@@ -35,7 +36,7 @@ static char ip[16];
 static bool wifi_up, mqtt_up;
 static esp_mqtt_client_handle_t mqtt;
 static char prefix[32];                   // ledify/ID/
-static char t_cmd[48], t_set[48], t_any[48], t_live[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
+static char t_cmd[48], t_set[48], t_any[48], t_live[48], t_audio[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
 
 static bool load(const char *key, char *buf, size_t n)
 {
@@ -293,6 +294,7 @@ void net_init(QueueHandle_t q)
     snprintf(t_set, sizeof t_set, "%slight/set", prefix);
     snprintf(t_any, sizeof t_any, "%s+/set", prefix);
     snprintf(t_live, sizeof t_live, "%slive", prefix);
+    snprintf(t_audio, sizeof t_audio, "%saudio", prefix);
     snprintf(t_lstate, sizeof t_lstate, "%slight/state", prefix);
     snprintf(t_state, sizeof t_state, "%sstate", prefix);
     snprintf(t_sensors, sizeof t_sensors, "%ssensors", prefix);
@@ -356,5 +358,14 @@ void net_publish_live(const char *json)
 {
     if (mqtt_up) {
         esp_mqtt_client_publish(mqtt, t_live, json, 0, 0, 0);
+    }
+}
+
+// Raw microphone audio while "listen" is active: 16 kHz, 16-bit, little endian, 1 KB per message. Enqueued
+// (not sent inline) so the mic task never waits on the network; the outbox just drops behind if Wi-Fi is slow.
+void net_publish_audio(const void *pcm, int len)
+{
+    if (mqtt_up) {
+        esp_mqtt_client_enqueue(mqtt, t_audio, pcm, len, 0, 0, true);
     }
 }

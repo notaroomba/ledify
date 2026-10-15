@@ -135,6 +135,8 @@
       <span>Treble</span><div class="bar"><i id="b2" style="background:#5ad1ff"></i></div>
     </div>
     <div class="slider" style="margin-top:12px"><label>Mic gain</label><input type="range" id="gain" min="1" max="100"><output id="gainv"></output></div>
+    <div class="row" style="margin-top:6px"><button class="btn" id="listen">Listen to the board's mic</button><span class="pill" id="lstate">off</span></div>
+    <div class="slider"><label>Volume</label><input type="range" id="lvol" min="1" max="200" value="40"><output id="lvolv">40</output></div>
     <details>
       <summary>Use music or the mic from this device instead</summary>
       <p class="hint">Plays a file here and sends loudness, bass, mid, treble and beats to the board 20 times a second, so the sound effects follow it.</p>
@@ -232,7 +234,7 @@ function connect(c) {
   client.on('connect', () => {
     if (c !== BUILT_IN) localStorage.setItem('ledify.creds', JSON.stringify(c));
     $('login').hidden = true;
-    client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live']);
+    client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live', 'ledify/+/audio']);
     keepLive();
   });
   client.on('error', e => { $('loginmsg').textContent = 'Broker said: ' + e.message; $('onlinet').textContent = 'broker error'; $('onlinet').className = 'pill off'; $('login').hidden = false; });
@@ -240,6 +242,7 @@ function connect(c) {
   client.on('message', (topic, payload) => {
     const m = topic.match(/^ledify\/([^/]+)\/(.+)$/); if (!m) return;
     const id = m[1], what = m[2], d = devices[id] || (devices[id] = {});
+    if (what === 'audio') { if (id === current) playChunk(payload); return; }
     const text = payload.toString();
     if (what === 'status') d.online = text === 'online';
     else { try { d[what] = JSON.parse(text); } catch (e) { return; } }
@@ -351,6 +354,27 @@ $('sendtemp').onclick = () => { if ($('temp_in').value !== '') send('temp ' + $(
 $('ota').onclick = () => { if (confirm('Update the firmware from\n' + $('otaurl').value + ' ?\nThe strip restarts when it is done.')) send('ota ' + $('otaurl').value); };
 $('send').onclick = () => { if ($('cmd').value.trim()) { send($('cmd').value.trim()); $('cmd').value = ''; } };
 $('cmd').onkeydown = e => { if (e.key === 'Enter') $('send').onclick(); };
+
+// ---- listen: the board streams 16 kHz 16-bit PCM on ledify/<id>/audio while a "listen" lease is active
+let lctx, lnext = 0, listening = false, ltimer;
+slider('lvol', () => null);
+function playChunk(buf) {
+  if (!listening) return;
+  const pcm = new Int16Array(buf.buffer, buf.byteOffset, buf.length >> 1);
+  const ab = lctx.createBuffer(1, pcm.length, 16000), ch = ab.getChannelData(0), g = $('lvol').value / 32768;
+  for (let i = 0; i < pcm.length; i++) ch[i] = Math.max(-1, Math.min(1, pcm[i] * g));
+  const src = lctx.createBufferSource(); src.buffer = ab; src.connect(lctx.destination);
+  const t = Math.max(lnext, lctx.currentTime + 0.08);       // ~80 ms jitter buffer
+  src.start(t); lnext = t + ab.duration;
+  $('lstate').textContent = 'playing'; $('lstate').className = 'pill on';
+}
+$('listen').onclick = () => {
+  if (listening) { listening = false; clearInterval(ltimer); send('listen 0'); $('listen').textContent = "Listen to the board's mic"; $('lstate').textContent = 'off'; $('lstate').className = 'pill'; return; }
+  if (!lctx) lctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (lctx.state === 'suspended') lctx.resume();
+  listening = true; lnext = 0; send('listen 60'); ltimer = setInterval(() => send('listen 60'), 45000);
+  $('listen').textContent = 'Stop listening'; $('lstate').textContent = 'waiting for audio'; $('lstate').className = 'pill';
+};
 
 // ---- audio feed: Web Audio analysis of a file or this device's mic, sent as "audio L B M T P" at 20 Hz
 let actx, analyser, asrc, atimer, apeak = 1, bpeak = [1, 1, 1], aavg = 0, apulse = 0;

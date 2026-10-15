@@ -13,4 +13,5 @@ void mic_bands(uint8_t out[3]); // bass, mid, treble 0..255, each against its ow
 void mic_feed(uint8_t loud, const uint8_t bands[3], uint8_t pulse); // from the panel; used instead of the mic for MIC_FEED_HOLD_MS
 void mic_stats(uint32_t *max_us, uint32_t *dropped);
 int mic_raw_json(char *out, size_t n);   // diagnostics JSON: current samples and the loudest block of the last minute
-float mic_db_peak(void);                 // loudest block of the last minute, approximate dB SPL // worst block time (budget 8000 us) and lost blocks since last call
+float mic_db_peak(void);                 // loudest block of the last minute, approximate dB SPL
+void mic_listen(int secs);               // stream 16 kHz PCM to MQTT for this long (the panel renews it) // worst block time (budget 8000 us) and lost blocks since last call

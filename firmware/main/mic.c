@@ -6,6 +6,7 @@
 #include "mic.h"
 #include "board.h"
 #include "fft.h"
+#include "net.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
@@ -31,6 +32,9 @@ static uint32_t floor_q;       // running noise floor of x in 1/256 steps, so sm
 static int hold, nblock;
 static volatile uint32_t block_max_us, drops;   // real-time check, read and reset by mic_stats()
 static int32_t peak_raw[16];   // diagnostics: samples from the loudest block of the last minute
+static int16_t sbuf[512];      // "listen": 32 ms of 16 kHz audio per MQTT message
+static int spos;
+static volatile int64_t listen_until;
 static uint32_t peak_rms;
 static int64_t peak_at;
 static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
@@ -91,6 +95,14 @@ static void block(void)
     memmove(win, win + N / 2, N / 2 * sizeof win[0]);
     for (int i = 0; i < N / 2; i++) {
         win[N / 2 + i] = ((raw[2 * i] >> 16) + (raw[2 * i + 1] >> 16)) / 2;
+    }
+    if (now < listen_until) {                                 // ship the newest 128 decimated samples
+        memcpy(sbuf + spos, win + N / 2, N / 2 * sizeof sbuf[0]);
+        spos += N / 2;
+        if (spos >= 512) {
+            net_publish_audio(sbuf, sizeof sbuf);
+            spos = 0;
+        }
     }
     if (++nblock % 4 == 0) {
         uint32_t m[3];
@@ -232,4 +244,9 @@ int mic_raw_json(char *out, size_t n)
 float mic_db_peak(void)
 {
     return peak_rms ? MIC_DB_FULL_SCALE + 20 * log10f(peak_rms / 32768.0f * 1.4142f) : 0;
+}
+
+void mic_listen(int secs)
+{
+    listen_until = esp_timer_get_time() + (int64_t)secs * 1000000;
 }
