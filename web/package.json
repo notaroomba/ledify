@@ -1,12 +1,21 @@
 {
   "name": "ledify-panel",
   "private": true,
-  "description": "Ledify control panel: static page, Tailwind CSS compiled at build time",
+  "type": "module",
   "scripts": {
-    "build": "tailwindcss -i src/input.css -o dist/style.css --minify",
-    "watch": "tailwindcss -i src/input.css -o dist/style.css --watch"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.1",
+    "solid-js": "^1.9.3"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.17"
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.0.3",
+    "vite-plugin-solid": "^2.11.0"
   }
 }
