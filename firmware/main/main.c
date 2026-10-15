@@ -56,6 +56,57 @@ static int lux = -1;                        // latest reading, -1 without a sens
 static float temp_in;                       // fed in over MQTT; the barometer's until then. ponytail: never expires, add a timeout if Home Assistant going away should fall back
 static bool have_temp_in;
 static int64_t live_until;                  // "live N": stream loudness/bands to MQTT until then
+static uint32_t boots;                      // boot counter and the previous boot's PD result, kept in NVS so a
+static char prev_pd[96];                    // trip to a charger with no Wi-Fi can still be read afterwards
+static bool pd_saved;
+
+static const char *reset_name(void)
+{
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: case ESP_RST_TASK_WDT: case ESP_RST_WDT: return "wdt";
+    case ESP_RST_USB: return "usb";
+    default: return "other";
+    }
+}
+
+static void boot_bookkeeping(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_get_u32(h, "boots", &boots);
+    boots++;
+    nvs_set_u32(h, "boots", boots);
+    size_t len = sizeof prev_pd;
+    if (nvs_get_str(h, "last_pd", prev_pd, &len) != ESP_OK) {
+        prev_pd[0] = 0;
+    }
+    nvs_erase_key(h, "last_pd");            // if this boot never negotiates, the next one reads an empty record
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void save_pd_result(void)
+{
+    const pd_state_t *pd = pd_get();
+    char s[96];
+    int w = snprintf(s, sizeof s, "offers");
+    for (int i = 0; i < pd->n_pdos; i++) {
+        w += snprintf(s + w, sizeof s - w, " %d/%d", pd->pdo_mv[i], pd->pdo_ma[i]);
+    }
+    snprintf(s + w, sizeof s - w, " got %d/%d", pd->contract_mv, pd->contract_ma);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "last_pd", s);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
 static bool power;
 static int volt = 5;
 static bool have_mic;
@@ -321,6 +372,7 @@ static void status(char *out, size_t n)
     }
     w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu",
                   (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw());
+    w += snprintf(out + w, n - w, ",\"boots\":%lu,\"rst\":\"%s\",\"prev_pd\":\"%s\"", (unsigned long)boots, reset_name(), prev_pd);
     if (d.have_lux) {
         w += snprintf(out + w, n - w, ",\"lux\":%.1f", d.lux);
     }
@@ -666,6 +718,8 @@ void app_main(void)
     leds_init();
     load_cfg();
     leds_set_limit(limit);
+    boot_bookkeeping();
+    ESP_LOGI(TAG, "boot %lu, reset %s, previous pd: %s", (unsigned long)boots, reset_name(), prev_pd[0] ? prev_pd : "none");
     ESP_LOGI(TAG, "leds up, %d x %s", leds_get_count(), leds_type_name());
     vTaskDelay(pdMS_TO_TICKS(PD_START_DELAY_MS));
     pd_init(bus);
@@ -722,6 +776,10 @@ void app_main(void)
             frame_max_us = 0;
             frames = 0;
             last_beat = now;
+        }
+        if (!pd_saved && pd_get()->ready && now > 5000000) {    // keep this boot's negotiation for the next boot to report
+            save_pd_result();
+            pd_saved = true;
         }
         if (dirty_at && now - dirty_at > 2000000) {          // sliders send many values; write NVS once they settle
             save_count(leds_get_count());
