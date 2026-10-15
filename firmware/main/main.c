@@ -248,6 +248,7 @@ static void reply(const char *s)
 {
     ESP_LOGI(TAG, "> %s", s);
     ble_send(s);
+    net_publish_reply(s);
 }
 
 static int lookup(const char *name, const char *const *names, int n)

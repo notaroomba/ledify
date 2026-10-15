@@ -144,6 +144,7 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | `ledify/<id>/light/set` | in | Home Assistant JSON light: `{"state":"ON","brightness":128,"color":{"r":255,"g":0,"b":0},"effect":"rainbow"}` |
 | `ledify/<id>/KEY/set` | in | A bare value, run as the command `KEY value`. The Home Assistant entities use `count`, `type`, `auto` (`ON`/`OFF`), `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`; `temp` feeds a temperature in for the `temp` colour |
 | `ledify/<id>/audio/set` | in | `L B M T P` from the web panel's audio analysis (file or microphone) |
+| `ledify/<id>/reply` | out | The text reply to the last command (`ok`, `err ...`), what the console and BLE see |
 | `ledify/<id>/live` | out | `{"loud","bands","pulse","db","cap"}` at 10 Hz while a `live` lease is active |
 | `ledify/<id>/audio` | out | 1 KB binary messages of 16 kHz 16-bit little-endian PCM while a `listen` lease is active |
 | `ledify/<id>/light/state` | out | JSON light state |

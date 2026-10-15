@@ -15,4 +15,5 @@ bool net_mqtt_connected(void);
 // full status() output; sensors_json carries the readings used by the discovered sensors.
 void net_publish(const char *light_json, const char *status_json, const char *sensors_json);
 void net_publish_live(const char *json);   // not retained, QoS 0
+void net_publish_reply(const char *text);  // command replies, not retained
 void net_publish_audio(const void *pcm, int len);   // 16 kHz 16-bit mono, enqueued QoS 0
