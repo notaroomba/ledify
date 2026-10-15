@@ -74,7 +74,7 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | `ledify/<id>/type/set` | in | Chip type name, from the Home Assistant select |
 | `ledify/<id>/light/state` | out | JSON light state |
 | `ledify/<id>/state` | out | Same JSON as `status` |
-| `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_hpa":..,"sound":..}` |
+| `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}` (kPa, approximate dB SPL) |
 | `ledify/<id>/status` | out | `online` / `offline`, retained, set by the last will |
 
 State is published after every command and every 30 s. On connect the board sends retained discovery messages under `homeassistant/`, so with Home Assistant's MQTT integration pointed at the same broker a light (with the four modes as effects), a pixel-count slider, a chip-type select and illuminance, temperature, pressure and sound sensors appear by themselves.

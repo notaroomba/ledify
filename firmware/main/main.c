@@ -156,7 +156,7 @@ static void status(char *out, size_t n)
                       d.acc[0], d.acc[1], d.acc[2], d.gyr[0], d.gyr[1], d.gyr[2]);
     }
     if (have_mic) {
-        w += snprintf(out + w, n - w, ",\"sound\":%.4f", mic_level());
+        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f", mic_db());
     }
     snprintf(out + w, n - w, "}");
 }
@@ -176,8 +176,8 @@ static void publish(void)
     status(st, sizeof st);
     sensor_data_t d;
     sensors_read(&d);
-    snprintf(sens, sizeof sens, "{\"lux\":%.1f,\"temp_c\":%.2f,\"pressure_hpa\":%.1f,\"sound\":%.4f}",
-             d.lux, d.temp_c, d.pressure_pa / 100.0f, have_mic ? mic_level() : 0.0f);
+    snprintf(sens, sizeof sens, "{\"lux\":%.1f,\"temp_c\":%.2f,\"pressure_kpa\":%.2f,\"sound_db\":%.1f}",
+             d.lux, d.temp_c, d.pressure_pa / 1000.0f, have_mic ? mic_db() : 0.0f);
     net_publish(light, st, sens);
 }
 

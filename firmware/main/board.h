@@ -15,6 +15,8 @@
 #define PIN_MIC_SCK    23   // ICS-43434 bit clock
 #define PIN_MIC_WS     22   // ICS-43434 word select
 #define PIN_MIC_SD      6   // ICS-43434 data
+#define MIC_DB_FULL_SCALE 120  // ICS-43434: 94 dB SPL reads -26 dBFS, so 0 dBFS is 120 dB SPL; ponytail: no A-weighting
+#define MIC_DB_FLOOR 30        // below the mic's own noise floor the number means nothing
 
 #define NUM_LEDS      300   // pixels driven until "count" is set
 #define MAX_LEDS     1000   // most the firmware will drive (3 KB pixel buffer, 30 ms per frame)

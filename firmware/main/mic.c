@@ -43,10 +43,22 @@ float mic_level(void)
         return 0;
     }
     int cnt = n / 4;
-    double acc = 0;
+    double mean = 0, acc = 0;
     for (int i = 0; i < cnt; i++) {
-        float v = (buf[i] >> 8) / 8388608.0f;        // 24-bit sample, -1..1
+        mean += (buf[i] >> 8) / 8388608.0f;          // 24-bit sample, -1..1
+    }
+    mean /= cnt;
+    for (int i = 0; i < cnt; i++) {
+        float v = (buf[i] >> 8) / 8388608.0f - mean; // drop the mic's DC offset, it is not sound
         acc += v * v;
     }
     return sqrtf(acc / cnt);
+}
+
+// Approximate dB SPL: a full-scale sine is MIC_DB_FULL_SCALE, and RMS of a full-scale sine is 1/sqrt(2).
+float mic_db(void)
+{
+    float r = mic_level();
+    float db = r > 0 ? MIC_DB_FULL_SCALE + 20 * log10f(r * 1.4142f) : 0;
+    return db < MIC_DB_FLOOR ? MIC_DB_FLOOR : db;
 }

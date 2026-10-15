@@ -7,7 +7,7 @@
 //   ledify/ID/type/set     chip type from the Home Assistant select
 //   ledify/ID/light/state  JSON light state
 //   ledify/ID/state        full status JSON
-//   ledify/ID/sensors      {"lux":..,"temp_c":..,"pressure_hpa":..,"sound":..}
+//   ledify/ID/sensors      {"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}
 //   ledify/ID/status       online / offline (retained, last will)
 #include <string.h>
 #include <stdio.h>
@@ -128,8 +128,8 @@ static void discover(void)
     struct { const char *key, *name, *unit, *cls; } sensors[] = {
         {"lux", "Illuminance", "lx", "illuminance"},
         {"temp_c", "Temperature", "°C", "temperature"},
-        {"pressure_hpa", "Pressure", "hPa", "atmospheric_pressure"},
-        {"sound", "Sound level", "", ""},
+        {"pressure_kpa", "Pressure", "kPa", "atmospheric_pressure"},
+        {"sound_db", "Sound level", "dB", "sound_pressure"},
     };
     for (int i = 0; i < 4; i++) {
         snprintf(topic, sizeof topic, "homeassistant/sensor/%s_%s/config", id, sensors[i].key);
