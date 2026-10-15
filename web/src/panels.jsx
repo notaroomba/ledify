@@ -1,6 +1,6 @@
 // The cards. Each reads the board's state through the store and sends commands on the same topics the board uses.
-import { For, Show, createSignal, createEffect, createMemo } from 'solid-js';
-import { ui, dev, state, send, toast, logText, optimistic, opt } from './store';
+import { For, Index, Show, createSignal, createEffect } from 'solid-js';
+import { ui, dev, state, send, toast, logText, optimistic, opt, touch, settled } from './store';
 import { Range, Slider, Chips, Switch, confirmDialog, debounce, rgbHex } from './ui';
 import { listen, feed } from './audio';
 import { sp } from './spotify';
@@ -88,6 +88,102 @@ export function Effect() {
   </section>;
 }
 
+// Gradient editor in the Figma style: a bar with one handle per colour stop. Drag a handle to move it, click the bar
+// to add a stop there (with the colour the gradient has at that point), pick a handle to edit its colour and exact
+// position. Saved gradients replace the whole strip or go into a range of it, so several can sit side by side.
+// The board's palette (status field) is mirrored in once an edit settles, so a gradient set from Spotify or another
+// phone shows up here too.
+const MAX_STOPS = 16;
+const BUILT_IN_GRADIENTS = {
+  sunset: 'ff3c00@0,ff8c00@35,ff0066@70,4b0082@100',
+  ocean: '00e5ff@0,0080ff@50,001a66@100',
+  forest: '0b3d0b@0,2e8b57@50,b2ff59@100',
+  candy: 'ff6ec7@0,ffffff@50,7afcff@100',
+  'warm to cool': 'ffb46b@0,ffffff@50,b4d2ff@100',
+};
+const parseStops = str => (str || '').split(',').map(s => { const [c, p] = s.split('@'); return { c: '#' + c, p: +p }; }).filter(s => /^#[0-9a-f]{6}$/i.test(s.c) && s.p >= 0 && s.p <= 100);
+const sortedStops = st => [...st].sort((a, b) => a.p - b.p);
+const stopsCmd = st => sortedStops(st).map(s => s.c.slice(1).toLowerCase() + '@' + s.p).join(',');
+const stopsCss = st => 'linear-gradient(90deg, ' + sortedStops(st).map(s => s.c + ' ' + s.p + '%').join(', ') + ')';
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const colorAt = (st, p) => {                        // the gradient's colour at p %, the same blend the board does
+  const s = sortedStops(st), last = s[s.length - 1];
+  if (!s.length || p <= s[0].p) return s.length ? s[0].c : '#ffffff';
+  if (p >= last.p) return last.c;
+  let k = 0;
+  while (k < s.length - 2 && p >= s[k + 1].p) k++;
+  const a = s[k], b = s[k + 1], f = b.p === a.p ? 0 : (p - a.p) / (b.p - a.p), A = hexRgb(a.c), B = hexRgb(b.c);
+  return rgbHex(...A.map((v, i) => v + (B[i] - v) * f));
+};
+const loadGradients = () => { try { const v = JSON.parse(localStorage.getItem('ledify.gradients')); if (v && typeof v === 'object') return v; } catch (e) { /* none saved */ } return { ...BUILT_IN_GRADIENTS }; };
+const pctOf = e => Math.max(0, Math.min(100, Math.round(+e.currentTarget.value || 0)));
+export function Gradient() {
+  const [stops, setStops] = createSignal(parseStops(BUILT_IN_GRADIENTS.sunset));
+  const [sel, setSel] = createSignal(0);
+  const [lib, setLib] = createSignal(loadGradients());
+  const [from, setFrom] = createSignal(0), [to, setTo] = createSignal(100);
+  let bar, nameEl;
+  createEffect(() => { dev().seen; const str = state().palette; if (str && settled('palette') && stopsCmd(stops()) !== str) { setStops(parseStops(str)); setSel(0); } });
+  const cur = () => stops()[Math.min(sel(), stops().length - 1)];
+  const later = debounce();
+  const update = (next, now) => { touch('palette'); setStops(next); opt.setMode('palette'); const f = () => send('palette ' + stopsCmd(next)); now ? f() : later(f); };
+  const edit = (i, patch, now) => update(stops().map((s, k) => k === i ? { ...s, ...patch } : s), now);
+  const remove = i => { if (stops().length < 2) return; update(stops().filter((_, k) => k !== i), true); setSel(Math.min(i, stops().length - 1)); };
+  const pctAt = e => { const r = bar.getBoundingClientRect(); return Math.round(Math.max(0, Math.min(100, (e.clientX - r.left) * 100 / r.width))); };
+  const addAt = p => { if (stops().length >= MAX_STOPS) { toast('At most ' + MAX_STOPS + ' stops', 'warn'); return; } update([...stops(), { c: colorAt(stops(), p), p }], true); setSel(stops().length - 1); };
+  const drag = (i, e) => {
+    e.stopPropagation(); setSel(i);
+    const h = e.currentTarget; h.setPointerCapture(e.pointerId);
+    const move = ev => edit(i, { p: pctAt(ev) });
+    const up = ev => { edit(i, { p: pctAt(ev) }, true); h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up); };
+    h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+  };
+  const keys = (i, e) => {
+    const d = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    if (d) { e.preventDefault(); edit(i, { p: Math.max(0, Math.min(100, stops()[i].p + d * (e.shiftKey ? 10 : 1))) }); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); remove(i); }
+  };
+  const place = str => {                          // a saved gradient into from–to %; what sits outside that range stays
+    const a = Math.min(from(), to()), b = Math.max(from(), to());
+    const mapped = parseStops(str).map(s => ({ c: s.c, p: Math.round(a + (b - a) * s.p / 100) }));
+    // Stops on an inner boundary stay, giving a hard edge there: the old colour ends, the new one starts (order matters
+    // for stops at the same position). Nothing stays on the strip's own ends.
+    const below = stops().filter(s => s.p < a || (s.p === a && a > 0)), above = stops().filter(s => s.p > b || (s.p === b && b < 100));
+    const next = [...below, ...mapped, ...above];
+    if (next.length > MAX_STOPS) { toast('That needs more than ' + MAX_STOPS + ' stops', 'warn'); return; }
+    update(next, true); setSel(below.length);
+  };
+  const storeLib = l => { localStorage.setItem('ledify.gradients', JSON.stringify(l)); setLib(l); };
+  const saveGradient = () => { const name = nameEl.value.trim() || 'gradient ' + (Object.keys(lib()).length + 1); storeLib({ ...lib(), [name]: stopsCmd(stops()) }); nameEl.value = ''; toast('Saved "' + name + '"', 'ok', 2000); };
+  const delGradient = async name => { if (await confirmDialog('Delete gradient?', '"' + name + '" will be removed from this browser.', 'Delete')) { const l = { ...lib() }; delete l[name]; storeLib(l); } };
+  return <section class="card md:col-span-2">
+    <h2 class="card-title">Gradient <small>click the bar to add a stop, drag a handle to move it · {stops().length} of {MAX_STOPS}</small></h2>
+    <div ref={bar} class="relative mx-3 h-12 cursor-copy rounded-xl border border-line" style={{ background: stopsCss(stops()) }} onPointerDown={e => { if (e.target === bar) addAt(pctAt(e)); }}>
+      <Index each={stops()}>{(s, i) => <button type="button" class="absolute top-1/2 h-7 w-7 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none rounded-full border-2 border-white shadow-md active:cursor-grabbing" classList={{ 'ring-2 ring-accent ring-offset-2 ring-offset-surface': sel() === i }} style={{ left: s().p + '%', background: s().c }} aria-label={'stop ' + (i + 1) + ' at ' + s().p + '%'} onPointerDown={e => drag(i, e)} onKeyDown={e => keys(i, e)} />}</Index>
+    </div>
+    <div class="row mt-4">
+      <input type="color" class="h-10 w-14 cursor-pointer rounded-lg border border-line bg-raised p-0.5" aria-label="selected stop colour" value={cur().c} onInput={e => edit(sel(), { c: e.currentTarget.value })} onChange={e => edit(sel(), { c: e.currentTarget.value }, true)} />
+      <span class="hint">at</span><input type="number" min="0" max="100" class="field w-20" aria-label="selected stop position" value={cur().p} onChange={e => edit(sel(), { p: pctOf(e) }, true)} /><span class="hint">%</span>
+      <button type="button" class="btn btn-sm" disabled={stops().length < 2} onClick={() => remove(sel())}>Remove stop</button>
+      <button type="button" class="btn btn-sm" onClick={() => update(sortedStops(stops()).map((s, i, a) => ({ ...s, p: a.length > 1 ? Math.round(i * 100 / (a.length - 1)) : 0 })), true)}>Space evenly</button>
+      <button type="button" class="btn btn-sm" onClick={() => update([...stops()].reverse().map(s => ({ ...s, p: 100 - s.p })), true)}>Flip</button>
+    </div>
+    <h2 class="card-title mt-5">Saved gradients <small>this browser</small></h2>
+    <div class="row">
+      <span class="hint">place one into</span>
+      <input type="number" min="0" max="100" class="field w-20" aria-label="from percent" value={from()} onChange={e => setFrom(pctOf(e))} /><span class="hint">to</span>
+      <input type="number" min="0" max="100" class="field w-20" aria-label="to percent" value={to()} onChange={e => setTo(pctOf(e))} /><span class="hint">% of the strip; 0 to 100 replaces everything</span>
+    </div>
+    <div class="mt-2 flex flex-wrap gap-2">
+      <For each={Object.entries(lib())}>{([name, str]) => <span class="inline-flex overflow-hidden rounded-xl border border-line">
+        <button type="button" class="h-10 px-3.5 text-sm font-medium text-white [text-shadow:0_1px_2px_rgba(0,0,0,.8)]" style={{ background: stopsCss(parseStops(str)) }} onClick={() => place(str)}>{name}</button>
+        <button type="button" class="h-10 bg-raised px-2.5 text-xs text-muted hover:text-fg" aria-label={'delete ' + name} onClick={() => delGradient(name)}>✕</button>
+      </span>}</For>
+    </div>
+    <div class="row mt-3"><input ref={nameEl} type="text" class="field grow" placeholder="name the current gradient" aria-label="Gradient name" onKeyDown={e => e.key === 'Enter' && saveGradient()} /><button type="button" class="btn btn-primary btn-sm" onClick={saveGradient}>Save gradient</button></div>
+  </section>;
+}
+
 export function Sound() {
   const [gain, setGain] = optimistic('gain', () => state().gain);
   const pct = v => (v * 100 / 255) + '%';
@@ -125,6 +221,7 @@ export function Strip() {
   const [count, setCount] = optimistic('count', () => state().count);
   const [type, setType] = optimistic('type', () => state().type);
   const [volt, setVolt] = optimistic('volt', () => state().volt);
+  const [droop, setDroop] = optimistic('droop', () => state().droop);
   let num, sel;
   createEffect(() => { const v = count(); if (v !== undefined && document.activeElement !== num) num.value = v; });
   createEffect(() => { sel.value = type() || 'ws2812'; });
@@ -147,6 +244,8 @@ export function Strip() {
     </div>
     <div class="row mt-3"><span class="hint w-[92px]">Strip voltage</span><Chips chip="danger" items={[['5', '5 V'], ['12', '12 V']]} value={volt} onPick={pickVolt} /></div>
     <p class="hint mt-2">12 V only for 12 V strips (WS2815, WS2811); it needs a charger offering 15 V or more.</p>
+    <Slider rowClass="mt-4" label="Tail colour fix" min={0} max={100} value={droop} set={setDroop} send={v => 'droop ' + v} fmt={v => v ? v + ' %' : 'off'} />
+    <p class="hint">A strip fed from one end goes warm towards the far end as its voltage sags. This cuts red along the strip to balance it; set it so the far end looks white at your usual brightness. The real fix is a second 5 V feed into the far end.</p>
   </section>;
 }
 
@@ -196,10 +295,10 @@ export function Presets() {
   const save = () => {
     const s = state(), c = (dev().light || {}).color || { r: 255, g: 255, b: 255 }, a = all();
     const name = nameEl.value.trim() || 'look ' + (Object.keys(a).length + 1);
-    a[name] = { rgb: c.r + ' ' + c.g + ' ' + c.b, level: s.level, mode: s.mode, overlay: s.overlay, auto: s.auto, gain: s.gain, power: s.power };
+    a[name] = { rgb: c.r + ' ' + c.g + ' ' + c.b, level: s.level, mode: s.mode, overlay: s.overlay, auto: s.auto, gain: s.gain, power: s.power, palette: s.mode === 'palette' ? s.palette : undefined };
     store(a); nameEl.value = ''; toast('Saved "' + name + '"', 'ok', 2000);
   };
-  const apply = (name, p) => { send('rgb ' + p.rgb); send('level ' + p.level); send('mode ' + p.mode); if (p.overlay) send('overlay ' + p.overlay); send('auto ' + (p.auto ? 'on' : 'off')); send('gain ' + p.gain); if (p.power) send('on'); toast('Applied "' + name + '"', 'ok', 2000); };
+  const apply = (name, p) => { send('rgb ' + p.rgb); send('level ' + p.level); if (p.palette) send('palette ' + p.palette); send('mode ' + p.mode); if (p.overlay) send('overlay ' + p.overlay); send('auto ' + (p.auto ? 'on' : 'off')); send('gain ' + p.gain); if (p.power) send('on'); toast('Applied "' + name + '"', 'ok', 2000); };
   const del = async name => { if (await confirmDialog('Delete preset?', '"' + name + '" will be removed from this browser.', 'Delete')) { const a = all(); delete a[name]; store(a); } };
   return <section class="card md:col-span-2">
     <h2 class="card-title">Presets <small>saved in this browser</small></h2>

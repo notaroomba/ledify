@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <stdio.h>
 #include <string.h>
 
 // Chip families the RMT encoder knows. WS2812B/C/D/E, WS2813 and WS2815 all speak WS2812 timing in GRB;
@@ -30,8 +31,10 @@ static uint32_t budget_mw = LED_BUDGET_NO_PD_MW;
 static uint32_t need_mw;                   // the last frame's estimated draw at the requested level
 static bool limit_on;                      // scale brightness to the budget (else just report)
 static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour set gives white
-static uint8_t pal[8][3] = {{255, 255, 255}};             // palette stops, spread evenly along the strip
+static uint8_t pal[LED_MAX_STOPS][3] = {{255, 255, 255}};  // palette stops in strip order, with their position in %
+static uint8_t pal_pos[LED_MAX_STOPS];
 static int npal = 1;
+static uint8_t droop;                                     // tail colour fix in %, see leds_frame()
 static uint8_t hue, temp_pos = 128, last_cap;
 static uint8_t fb[MAX_LEDS][3];                          // one frame at full brightness, before the power cap
 
@@ -232,16 +235,17 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         case COLOR_RAINBOW:
             hsv(hue + i * 256 / count, p, p + 1, p + 2);
             break;
-        case COLOR_PALETTE: {                                       // linear blend between the stops, 8.8 fixed point
-            uint32_t pos = npal > 1 ? (uint32_t)i * (npal - 1) * 256 / (count > 1 ? count - 1 : 1) : 0;
-            int k = pos >> 8;
-            if (k >= npal - 1) {
-                k = npal > 1 ? npal - 2 : 0;
-                pos = (uint32_t)(npal - 1) << 8;
+        case COLOR_PALETTE: {                                       // blend between the two stops around this pixel, 8.8 fixed point
+            uint32_t x = count > 1 ? (uint32_t)i * 100 * 256 / (count - 1) : 0;   // position along the strip in %, 8.8
+            int k = 0;
+            while (k < npal - 2 && x >= (uint32_t)pal_pos[k + 1] << 8) {
+                k++;
             }
-            uint32_t f = npal > 1 ? pos - ((uint32_t)k << 8) : 0;
+            int k1 = k + 1 < npal ? k + 1 : k;
+            uint32_t p0 = (uint32_t)pal_pos[k] << 8, p1 = (uint32_t)pal_pos[k1] << 8;
+            uint32_t f = x <= p0 || p1 <= p0 ? 0 : x >= p1 ? 256 : (x - p0) * 256 / (p1 - p0);   // before the first stop and after the last: that stop
             for (int ch = 0; ch < 3; ch++) {
-                p[ch] = (pal[k][ch] * (256 - f) + pal[npal > 1 ? k + 1 : k][ch] * f) >> 8;
+                p[ch] = (pal[k][ch] * (256 - f) + pal[k1][ch] * f) >> 8;
             }
             break;
         }
@@ -262,8 +266,20 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
     }
     last_cap = capped(sum, lvl);
     uint8_t use = limit_on ? last_cap : lvl;
+    // A strip fed from one end sags towards the far end, where blue and green drop out of regulation before red, so
+    // white turns warm along the strip. droop cuts red (and half as much green) with a parabolic profile, scaled
+    // by how much of a full-white load this frame draws; the knob absorbs the strip's resistance. Feeding 5 V in
+    // at the far end as well is the real fix.
+    uint32_t load = droop ? (sum / 255 * use / 255) * 256 / ((uint32_t)count * (LED_RED_MW + LED_GREEN_MW + LED_BLUE_MW)) : 0;   // 0..256 of full white
     for (int i = 0; i < count; i++) {
-        pixel(i, fb[i][0] * use / 255, fb[i][1] * use / 255, fb[i][2] * use / 255);
+        uint32_t r = fb[i][0] * use / 255, g = fb[i][1] * use / 255, b = fb[i][2] * use / 255;
+        if (load) {
+            uint32_t prof = ((uint32_t)2 * count * i - (uint32_t)i * i) * 256 / ((uint32_t)count * count);   // 0 at the feed, 256 at the far end
+            uint32_t sag = droop * load * prof / (100 * 256);                                               // 0..256
+            r = r * (256 - sag) >> 8;
+            g = g * (256 - sag / 2) >> 8;
+        }
+        pixel(i, r, g, b);
     }
     led_strip_refresh(strip);
 }
@@ -283,12 +299,38 @@ uint32_t leds_get_budget_mw(void)
     return budget_mw;
 }
 
-void leds_set_palette(const uint8_t (*stops)[3], int n)
+void leds_set_palette(const uint8_t (*stops)[3], const uint8_t *pos, int n)
 {
-    npal = n < 1 ? 1 : n > 8 ? 8 : n;
+    npal = n < 1 ? 1 : n > LED_MAX_STOPS ? LED_MAX_STOPS : n;
     for (int i = 0; i < npal; i++) {
         for (int ch = 0; ch < 3; ch++) {
             pal[i][ch] = stops[i][ch];
         }
+        pal_pos[i] = pos ? (pos[i] > 100 ? 100 : pos[i]) : npal > 1 ? i * 100 / (npal - 1) : 0;
     }
+    for (int i = 1; i < npal; i++) {                             // keep the stops in strip order (stable insertion sort)
+        for (int j = i; j > 0 && pal_pos[j - 1] > pal_pos[j]; j--) {
+            uint8_t t = pal_pos[j];
+            pal_pos[j] = pal_pos[j - 1];
+            pal_pos[j - 1] = t;
+            for (int ch = 0; ch < 3; ch++) {
+                t = pal[j][ch];
+                pal[j][ch] = pal[j - 1][ch];
+                pal[j - 1][ch] = t;
+            }
+        }
+    }
+}
+
+void leds_palette_str(char *out, size_t n)
+{
+    size_t w = 0;
+    for (int i = 0; i < npal && w < n; i++) {
+        w += snprintf(out + w, n - w, "%s%02x%02x%02x@%d", i ? "," : "", pal[i][0], pal[i][1], pal[i][2], pal_pos[i]);
+    }
+}
+
+void leds_set_droop(uint8_t pct)
+{
+    droop = pct > 100 ? 100 : pct;
 }

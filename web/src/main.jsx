@@ -3,7 +3,7 @@ import { For, Show, createSignal, createEffect, createMemo, onMount } from 'soli
 import './index.css';
 import { ui, setUi, state, init, selectDevice, useOverride, useBuiltIn, savedCreds, BUILT_IN } from './store';
 import { Confirm } from './ui';
-import { Hero, Colour, Effect, Sound, Strip, Sensors, Spotify, Presets, Advanced } from './panels';
+import { Hero, Colour, Effect, Gradient, Sound, Strip, Sensors, Spotify, Presets, Advanced } from './panels';
 import { sp } from './spotify';
 
 function Broker() {
@@ -47,7 +47,7 @@ function App() {
       <Show when={off()}><div class="bg-warn/15 py-1.5 text-center text-sm text-warn">The board is offline: unplugged, or without Wi-Fi. Controls will apply when it is back.</div></Show>
     </header>
     <main class="mx-auto grid max-w-5xl gap-4 px-4 py-4 pb-24 md:grid-cols-2" classList={{ offline: off() }}>
-      <Hero /><Colour /><Effect /><Sound /><Strip /><Sensors /><Spotify /><Presets /><Advanced />
+      <Hero /><Colour /><Effect /><Gradient /><Sound /><Strip /><Sensors /><Spotify /><Presets /><Advanced />
     </main>
     <div class="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex flex-col items-center gap-2 px-4"><For each={ui.toasts}>{t => <div class={'toast toast-' + t.kind}>{t.text}</div>}</For></div>
     <Confirm />

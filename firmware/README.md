@@ -58,8 +58,9 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `pddelay N` | Milliseconds after boot before the board starts talking PD, 0-30000 (saved); a diagnostic for chargers that cut power during the handshake |
 | `pdmax N` | Highest PD voltage to request, 5000-20000 mV (saved). `status` also reports `boots`, the reset reason and a log of the last four boots with what each charger offered; two boots in a row that die early make the next one stay at 5 V |
 | `limit 0\|1` | 1 dims to the power budget, 0 (default) sends what was asked and only reports the estimate. Saved |
+| `droop N` | Tail colour fix, 0-100 (saved, default 0). A strip fed from one end sags towards the far end, where blue and green dim before red, so white turns warm along the strip. `droop` cuts red (and half as much green) progressively along the strip, scaled by how much of a full-white load the frame draws; set it so the far end looks white at your usual brightness. The real fix is feeding 5 V (and ground) into the far end of the strip as well |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
-| `palette hex,hex,...` | Up to 8 colour stops (`ff8800,2244ff`) spread along the strip as a gradient; also selects the `palette` colour source (the panel sends the album cover's colours) |
+| `palette hex[@pct],...` | Up to 16 colour stops as a gradient along the strip, each with an optional position in percent (`ff8800@0,2244ff@35,ffffff@100`; without positions they are spread evenly, and the stops are sorted by position). Also selects the `palette` colour source; `status` reports the stops as `palette`. The panel's gradient editor and the album-cover colours use this |
 | `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |

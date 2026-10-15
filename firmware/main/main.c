@@ -144,8 +144,9 @@ static int16_t gain = 25, lux_lo = 0, lux_hi = 500, night = 0, temp_lo = 15, tem
 static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
+static int16_t droop;                       // see settings[]
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -156,6 +157,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"limit", &limit, 0, 1},                 // 1 = dim to the power budget, 0 = send what was asked and warn
     {"pdmax", &pdmax, 5000, 20000},          // highest PD voltage to request, in mV
     {"pddelay", &pddelay, 0, 30000},         // ms after boot before the board talks PD (experiments with picky chargers)
+    {"droop", &droop, 0, 100},               // tail colour fix: red cut along the strip against voltage sag, in percent
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -323,6 +325,7 @@ static bool set_setting(int i, int v)
     dirty_at = esp_timer_get_time();
     mic_set_gain(gain);
     leds_set_limit(limit);
+    leds_set_droop(droop);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -406,8 +409,10 @@ static void status(char *out, size_t n)
     for (int i = 0; i < pd->n_pdos; i++) {
         w += snprintf(out + w, n - w, "%s[%d,%d]", i ? "," : "", pd->pdo_mv[i], pd->pdo_ma[i]);
     }
-    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu",
-                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw());
+    char pal[LED_MAX_STOPS * 11 + 1];
+    leds_palette_str(pal, sizeof pal);
+    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu,\"palette\":\"%s\"",
+                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw(), pal);
     w += snprintf(out + w, n - w, ",\"boots\":%lu,\"rst\":\"%s\",\"pdmax\":%d,\"boot_log\":[\"%s\",\"%s\",\"%s\",\"%s\"]",
                   (unsigned long)boots, reset_name(), pd_get_max_mv(), boot_log[0], boot_log[1], boot_log[2], boot_log[3]);
     if (d.have_lux) {
@@ -528,7 +533,7 @@ static void handle(char *line)
             *p = tolower((unsigned char)*p);
         }
     }
-    static char out[768];
+    static char out[1280];                  // status JSON: about 950 bytes with 16 palette stops
     int s = setting_idx(tok[0]);
 
     if (!strcmp(tok[0], "on") && n == 1) {
@@ -680,13 +685,24 @@ static void handle(char *line)
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
         reply("ok, see the live topic");
-    } else if (!strcmp(tok[0], "palette") && n == 2) {           // "palette ff8800,2244ff,..." up to 8 stops
-        uint8_t stops[8][3];
-        int ns = 0;
+    } else if (!strcmp(tok[0], "palette") && n == 2) {           // "palette ff8800@0,2244ff@35,..." up to LED_MAX_STOPS stops, position in % optional
+        uint8_t stops[LED_MAX_STOPS][3], pos[LED_MAX_STOPS];
+        int ns = 0, with_pos = 0;
         char *save2;
-        for (char *h = strtok_r(tok[1], ",", &save2); h && ns < 8; h = strtok_r(NULL, ",", &save2)) {
+        for (char *h = strtok_r(tok[1], ",", &save2); h && ns < LED_MAX_STOPS; h = strtok_r(NULL, ",", &save2)) {
+            char *at = strchr(h, '@');
+            if (at) {
+                *at++ = 0;
+                int p = atoi(at);
+                if (p < 0 || p > 100) {
+                    reply("err palette: position 0-100");
+                    return;
+                }
+                pos[ns] = p;
+                with_pos++;
+            }
             if (strlen(h) != 6) {
-                reply("err palette rrggbb,rrggbb,...");
+                reply("err palette rrggbb[@pct],rrggbb[@pct],...");
                 return;
             }
             unsigned long v = strtoul(h, NULL, 16);
@@ -695,11 +711,11 @@ static void handle(char *line)
             stops[ns][2] = v;
             ns++;
         }
-        if (!ns) {
-            reply("err palette rrggbb,...");
+        if (!ns || (with_pos && with_pos != ns)) {
+            reply(ns ? "err palette: give every stop a position, or none" : "err palette rrggbb,...");
             return;
         }
-        leds_set_palette(stops, ns);
+        leds_set_palette(stops, with_pos ? pos : NULL, ns);
         color = COLOR_PALETTE;
         reply("ok");
     } else if (!strcmp(tok[0], "live") && n == 2) {
@@ -722,7 +738,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12 yes> palette<hex,hex,..> live<s> listen<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "volt<5|12 yes> droop<n> palette<hex[@pct],..> live<s> listen<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -755,6 +771,7 @@ void app_main(void)
     leds_init();
     load_cfg();
     leds_set_limit(limit);
+    leds_set_droop(droop);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);

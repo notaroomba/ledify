@@ -171,6 +171,7 @@ static void discover(void)
         {"night", "night lux", "lx", "mdi:weather-night", "box", 0, 1000},
         {"temp_lo", "temp low", "°C", "mdi:snowflake", "slider", -40, 100},
         {"temp_hi", "temp high", "°C", "mdi:fire", "slider", -40, 100},
+        {"droop", "tail colour fix", "%", "mdi:resistor", "slider", 0, 100},
     };
     for (int i = 0; i < sizeof nums / sizeof nums[0]; i++) {
         snprintf(topic, sizeof topic, "homeassistant/number/%s_%s/config", id, nums[i].key);

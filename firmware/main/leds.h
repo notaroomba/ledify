@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 void leds_init(void);
@@ -25,7 +26,10 @@ void leds_set_temp(uint8_t pos);                // temperature colour: 0 blue, 1
 // above only change state; whoever changes something draws the next frame.
 typedef enum { COLOR_SOLID, COLOR_RAINBOW, COLOR_TEMP, COLOR_SPECTRUM, COLOR_METER, COLOR_PALETTE } leds_color_t;
 #define LED_COLORS "solid|rainbow|temp|spectrum|meter|palette"
-void leds_set_palette(const uint8_t (*stops)[3], int n);   // 1..8 colour stops for the palette source
+#define LED_MAX_STOPS 16
+void leds_set_palette(const uint8_t (*stops)[3], const uint8_t *pos, int n);   // 1..LED_MAX_STOPS colour stops; pos = % along the strip per stop, NULL spreads them evenly
+void leds_palette_str(char *out, size_t n);     // the stops as "rrggbb@pct,..."
+void leds_set_droop(uint8_t pct);               // tail colour fix 0..100: cut red along the strip against voltage sag, 0 = off
 // lvl: brightness after every modifier. lit: pixels on from the start of the strip (count for all of them).
 // bands: bass/mid/treble 0..255 for the spectrum bars.
 void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3]);
