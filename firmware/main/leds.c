@@ -38,6 +38,7 @@ static int npal[2] = {1, 1};
 static uint8_t stripes[LED_MAX_STOPS];                   // stripes: pixels per distinct stop colour, cycling; none = blend
 static int nstripes;
 static leds_color_t last_src = COLOR_SOLID;               // what the previous frame showed, for the colour easing rule
+static bool segs_on(void);
 static uint8_t droop;                                     // tail colour fix in %, see leds_frame()
 static uint16_t fade_ms = FADE_MS;
 static uint8_t shown[MAX_LEDS][3];                        // what is on the strip now (before brightness), eased towards fb
