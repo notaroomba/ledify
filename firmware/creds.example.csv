@@ -10,5 +10,5 @@ pass,data,string,YourPassword
 mqtt_url,data,string,mqtts://broker.example.com:8883
 mqtt_user,data,string,ledify
 mqtt_pass,data,string,YourBrokerPassword
-count,data,u8,30
+count,data,u16,300
 type,data,string,ws2812

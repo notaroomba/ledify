@@ -10,8 +10,10 @@ void leds_power(bool on);                       // LED buck enable
 void leds_select_12v(bool v);                   // turns the output off first
 void leds_set_level(uint8_t level);             // brightness cap 0..255
 uint8_t leds_get_level(void);
-void leds_set_count(uint8_t n);                 // pixels driven, 1..NUM_LEDS; the rest stay dark
-uint8_t leds_get_count(void);
+void leds_set_count(uint16_t n);                // pixels driven, 1..MAX_LEDS
+uint16_t leds_get_count(void);
+void leds_set_budget_mw(uint32_t mw);           // power available to the strip; brightness is capped to fit
+uint8_t leds_get_cap(void);                     // the level actually sent after the cap
 void leds_fill(uint8_t r, uint8_t g, uint8_t b);
 void leds_get_color(uint8_t *r, uint8_t *g, uint8_t *b);
 void leds_scaled(float f);                      // current colour scaled by 0..1, for sound mode

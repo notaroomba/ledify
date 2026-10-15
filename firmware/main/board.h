@@ -16,7 +16,12 @@
 #define PIN_MIC_WS     22   // ICS-43434 word select
 #define PIN_MIC_SD      6   // ICS-43434 data
 
-#define NUM_LEDS       30   // length of the strip
+#define NUM_LEDS      300   // pixels driven until "count" is set
+#define MAX_LEDS     1000   // most the firmware will drive (3 KB pixel buffer, 30 ms per frame)
+#define LED_MW_PER_CHANNEL 100   // one colour at full on one pixel; ponytail: tune per strip if the cap is off
+#define LED_BUDGET_NO_PD_MW 7500 // no PD contract: assume a 5 V 1.5 A port
+#define LED_BUCK_MAX_MA 10000    // LM61495 output limit
+#define LED_BUCK_EFF_PCT 85      // what makes it from the PD contract to the strip
 #define PD_WANT_MV  20000   // highest PD voltage we accept
 #define PD_WANT_MA   5000   // most current we ask for
 #define LED_POWER_SETTLE_MS 100     // buck soft start + pixel power-on reset before the first frame

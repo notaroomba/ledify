@@ -159,19 +159,3 @@ then I fixed a 0.1mm track I missed, exported the production files again and red
 with the extra sensors the pcba is around 300 usd now for 2 assembled boards, I looked at how much it would be to assemble them myself and its way cheaper per board but the esp32 is 0.4mm pitch and there are 3 LGA sensors so I'm going with pcba for this one
 
 **Total time spent: 2.5 hours**
-
-# Oct 14, 2026
-
-THE BOARDS CAME!! I ended up hot plating them myself and it mostly worked except c28 wasn't there and the esp wouldn't flash at all. turned out the flash chip wasn't talking to the esp (it kept reading back ffff) so I reflowed it and then it just worked lol. the second board is less happy, 3V3 reads 1.2V and there's like 2.6 ohms to ground on it somewhere so I still have to find that short
-
-then I spent most of the day on the firmware. its an esp-idf project now instead of the micropython boilerplate and it has drivers for everything: the FUSB302 for PD, the leds over rmt, the light sensor over i2c, the imu and barometer over spi, the i2s mic and bluetooth with the nordic uart service so I can send it commands from my phone
-
-the PD part was the hardest. first the board kept hard resetting because you have to answer the charger's capabilities within 30ms and I was polling too slow, so the PD stuff got its own task. then the mac would drop the usb connection like 3 seconds after the contract because I didn't set the "usb communications capable" bit in the request lol. now it gets a 5V 3A contract from the mac and asks for 20V from a real charger
-
-after that I made it a home automation thing. it joins wifi, connects to an mqtt broker and sends home assistant discovery messages so it shows up as a light with the modes as effects plus the sensors. the credentials live in the nvs partition on the esp and not in the code since the repo is public. the broker is mosquitto running on railway behind a tcp proxy
-
-connecting to my phone hotspot took way longer than it should have because the name has an ñ in it and I typed it wrong lol
-
-last thing was testing a 5V strip. the commands also work typed into the serial monitor now, and there's a `count` command so I can light just the first few pixels and a `type` command for the different chips (ws2811, sk6812 etc) because they have different timings and color orders. the first frame was going out before the buck had even turned on so the pixels missed it, now it waits a bit and resends once a second
-
-**Total time spent: 8 hours**

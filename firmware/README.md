@@ -11,7 +11,7 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/mic.c` | ICS-43434 microphone over I2S, returns an RMS level |
 | `main/ble.c` | Nordic UART service on NimBLE |
 | `main/net.c` | Wi-Fi station, MQTT client, Home Assistant discovery |
-| `main/board.h` | Pin map and tunables (`NUM_LEDS`, PD voltage, LED power settle time) |
+| `main/board.h` | Pin map and tunables (pixel limits, power budget, PD voltage, LED power settle time) |
 | `partitions.csv` | 16 MB flash: 24 KB NVS for settings, 4 MB app |
 | `creds.example.csv` | Template for the NVS settings image (Wi-Fi, broker, strip) |
 
@@ -34,14 +34,14 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `on` / `off` | LED buck on or off. Boots off |
 | `rgb R G B` | Fill the strip, 0-255 each |
 | `level N` | Brightness cap, 0-255 |
-| `count N` | How many pixels are driven, 1-`NUM_LEDS`. The rest are sent black. Saved |
+| `count N` | How many pixels are driven, 1-1000 (`MAX_LEDS`). Saved. Also a slider in Home Assistant |
 | `type ws2812` | Chip type: `ws2812` (also B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w` (RGBW), `ws2816`. Saved |
 | `mode solid` | Hold the colour |
 | `mode rainbow` | Animated rainbow |
 | `mode sound` | Brightness follows the microphone |
 | `mode auto` | Brightness follows the light sensor |
 | `volt 5` / `volt 12` | Select the output voltage. 12 V needs a PD contract of 15 V or more, and the output turns off first |
-| `status` | JSON with power state, strip settings, PD contract, network state, lux, temperature, pressure, accel, gyro and sound level |
+| `status` | JSON with power state, strip settings, the brightness cap, PD contract, network state, lux, temperature, pressure, accel, gyro and sound level |
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
@@ -56,6 +56,10 @@ The three pads are VCC, SIG and GND. SIG goes to the strip's **DIN** (data in; t
 
 SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which normally works over a short lead but is out of spec, so if a strip stays dark while VCC is present either put a level shifter (74AHCT125) on SIG or feed the first pixel's VCC through a diode so it sits at about 4.3 V. The board waits `LED_POWER_SETTLE_MS` after enabling the buck before sending the first frame and resends the solid colour once a second, so pixels that powered up late still catch it.
 
+## Power budget
+
+A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware never sends more than the supply can take: the budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract; each frame's brightness is scaled so `count × colour × LED_MW_PER_CHANNEL` fits. `status` reports the resulting `cap` next to the requested `level`. On a 15 W port 300 red pixels run at 108/255 and 300 white ones at 36/255; on a 100 W charger white gets about 240. The strip's own copper still can't carry that much, so inject power every 100 pixels or so on long 5 V runs.
+
 ## Wi-Fi, MQTT and Home Assistant
 
 Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
@@ -66,12 +70,14 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | --- | --- | --- |
 | `ledify/<id>/cmd` | in | Any text command from the table above |
 | `ledify/<id>/light/set` | in | Home Assistant JSON light: `{"state":"ON","brightness":128,"color":{"r":255,"g":0,"b":0},"effect":"rainbow"}` |
+| `ledify/<id>/count/set` | in | Pixel count as a number, from the Home Assistant slider |
+| `ledify/<id>/type/set` | in | Chip type name, from the Home Assistant select |
 | `ledify/<id>/light/state` | out | JSON light state |
 | `ledify/<id>/state` | out | Same JSON as `status` |
 | `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_hpa":..,"sound":..}` |
 | `ledify/<id>/status` | out | `online` / `offline`, retained, set by the last will |
 
-State is published after every command and every 30 s. On connect the board sends retained discovery messages under `homeassistant/`, so with Home Assistant's MQTT integration pointed at the same broker a light (with the four modes as effects) and illuminance, temperature, pressure and sound sensors appear by themselves.
+State is published after every command and every 30 s. On connect the board sends retained discovery messages under `homeassistant/`, so with Home Assistant's MQTT integration pointed at the same broker a light (with the four modes as effects), a pixel-count slider, a chip-type select and illuminance, temperature, pressure and sound sensors appear by themselves.
 
 ### Broker
 

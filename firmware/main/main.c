@@ -43,11 +43,12 @@ static bool have_mic;
 static QueueHandle_t cmd_q;
 
 // Strip length and chip type live in NVS next to the Wi-Fi credentials (namespace "cfg").
-static void save_count(uint8_t n)
+static void save_count(uint16_t n)
 {
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, "count", n);
+        nvs_erase_key(h, "count");            // older images stored it as u8
+        nvs_set_u16(h, "count", n);
         nvs_commit(h);
         nvs_close(h);
     }
@@ -66,14 +67,14 @@ static void save_type(const char *t)
 static void load_cfg(void)
 {
     nvs_handle_t h;
-    uint8_t n;
+    uint16_t n;
     char t[16];
     size_t len = sizeof t;
     if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
         if (nvs_get_str(h, "type", t, &len) == ESP_OK) {
             leds_set_type(t);
         }
-        if (nvs_get_u8(h, "count", &n) == ESP_OK) {
+        if (nvs_get_u16(h, "count", &n) == ESP_OK) {
             leds_set_count(n);
         }
         nvs_close(h);
@@ -103,6 +104,16 @@ static void console_task(void *arg)
     }
 }
 
+// Power the strip may draw: the PD contract minus buck losses, never more than the buck can deliver.
+static uint32_t power_budget_mw(void)
+{
+    const pd_state_t *pd = pd_get();
+    uint32_t in = pd->ready ? (uint32_t)pd->contract_mv * pd->contract_ma / 1000 * LED_BUCK_EFF_PCT / 100
+                            : LED_BUDGET_NO_PD_MW;
+    uint32_t out = (uint32_t)volt * LED_BUCK_MAX_MA;
+    return in < out ? in : out;
+}
+
 static void reply(const char *s)
 {
     ESP_LOGI(TAG, "> %s", s);
@@ -130,9 +141,9 @@ static void status(char *out, size_t n)
     const pd_state_t *pd = pd_get();
     char net[96];
     net_status(net, sizeof net);
-    int w = snprintf(out, n, "{\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"level\":%d,\"count\":%d,\"type\":\"%s\","
+    int w = snprintf(out, n, "{\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"level\":%d,\"count\":%d,\"type\":\"%s\",\"cap\":%d,"
                      "\"pd\":{\"attached\":%d,\"ready\":%d,\"mv\":%d,\"ma\":%d},\"net\":\"%s\"",
-                     power, volt, mode_names[mode], leds_get_level(), leds_get_count(), leds_type_name(),
+                     power, volt, mode_names[mode], leds_get_level(), leds_get_count(), leds_type_name(), leds_get_cap(),
                      pd->cc != 0, pd->ready, pd->contract_mv, pd->contract_ma, net);
     if (d.have_lux) {
         w += snprintf(out + w, n - w, ",\"lux\":%.1f", d.lux);
@@ -282,8 +293,8 @@ static void handle(char *line)
         reply("ok");
     } else if (!strcmp(tok[0], "count") && n == 2) {
         int c = atoi(tok[1]);
-        if (c < 1 || c > NUM_LEDS) {
-            snprintf(out, sizeof out, "err count 1-%d", NUM_LEDS);
+        if (c < 1 || c > MAX_LEDS) {
+            snprintf(out, sizeof out, "err count 1-%d", MAX_LEDS);
             reply(out);
             return;
         }
@@ -389,6 +400,7 @@ void app_main(void)
     int64_t last_anim = 0, last_lux = 0, last_beat = 0, last_pub = 0, last_frame = 0;
     cmd_t cmd;
     for (;;) {
+        leds_set_budget_mw(power_budget_mw());
         if (xQueueReceive(cmd_q, &cmd, 0)) {
             handle(cmd.text);
             publish();

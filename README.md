@@ -84,14 +84,14 @@ Designed in KiCad with attention to RF design and high current power delivery. T
 
 ## Firmware
 
-The firmware in [`firmware/`](firmware/) is an ESP-IDF v6.1 project with drivers for everything on the board: USB-PD negotiation on the FUSB302B, the LED strip, the light sensor, IMU, barometer and microphone. It takes the same text commands from three places: the USB serial console, Bluetooth (it advertises as `Ledify` with the Nordic UART service, so nRF Connect or Bluefruit Connect work) and MQTT. Point it at a Wi-Fi network and a broker and it shows up in Home Assistant on its own as a light with four effects plus illuminance, temperature, pressure and sound sensors.
+The firmware in [`firmware/`](firmware/) is an ESP-IDF v6.1 project with drivers for everything on the board: USB-PD negotiation on the FUSB302B, the LED strip, the light sensor, IMU, barometer and microphone. It takes the same text commands from three places: the USB serial console, Bluetooth (it advertises as `Ledify` with the Nordic UART service, so nRF Connect or Bluefruit Connect work) and MQTT. Point it at a Wi-Fi network and a broker and it shows up in Home Assistant on its own as a light with four effects, a pixel-count slider, a chip-type select and illuminance, temperature, pressure and sound sensors. Brightness is capped automatically to what the USB-PD contract can supply, so a long strip on a laptop port dims instead of browning out.
 
 | Command               | Action                                                                 |
 | --------------------- | ---------------------------------------------------------------------- |
 | `on` / `off`          | LED buck on or off                                                     |
 | `rgb R G B`           | Fills the strip with a color (0-255 each)                              |
 | `level N`             | Brightness cap (0-255)                                                 |
-| `count N`             | How many pixels to drive                                               |
+| `count N`             | How many pixels to drive (up to 1000, also a slider in Home Assistant) |
 | `type ws2812`         | Chip type: `ws2812` (B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w`, `ws2816` |
 | `mode solid`          | Holds the color                                                        |
 | `mode rainbow`        | Animated rainbow                                                       |

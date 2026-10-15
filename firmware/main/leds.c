@@ -25,10 +25,12 @@ static int type_idx;
 
 static led_strip_handle_t strip;
 static uint8_t level = 128;
-static uint8_t count = NUM_LEDS;
+static uint16_t count = NUM_LEDS;
+static uint32_t budget_mw = LED_BUDGET_NO_PD_MW;
 static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour set gives white
 static uint8_t hue;
 static void show(uint8_t r, uint8_t g, uint8_t b, uint8_t lvl);
+static uint8_t capped(uint32_t sum_rgb, uint8_t lvl);
 
 // (Re)create the RMT device for the selected chip: timing comes from the model, byte order from the format.
 static void make_strip(void)
@@ -38,7 +40,7 @@ static void make_strip(void)
     }
     led_strip_config_t sc = {
         .strip_gpio_num = PIN_LED_DATA,
-        .max_leds = NUM_LEDS,
+        .max_leds = count,
         .led_model = types[type_idx].model,
         .color_component_format = types[type_idx].white ? LED_STRIP_COLOR_COMPONENT_FMT_GRBW
                                 : types[type_idx].rgb_order ? LED_STRIP_COLOR_COMPONENT_FMT_RGB
@@ -124,25 +126,41 @@ uint8_t leds_get_level(void)
     return level;
 }
 
-void leds_set_count(uint8_t n)
+void leds_set_count(uint16_t n)
 {
-    count = n < 1 ? 1 : n > NUM_LEDS ? NUM_LEDS : n;
+    led_strip_clear(strip);                 // pixels past the new end keep their last frame, so blank them first
+    count = n < 1 ? 1 : n > MAX_LEDS ? MAX_LEDS : n;
+    make_strip();                           // the RMT device sends max_leds pixels per frame
     show(cur_r, cur_g, cur_b, level);
 }
 
-uint8_t leds_get_count(void)
+uint16_t leds_get_count(void)
 {
     return count;
 }
 
+void leds_set_budget_mw(uint32_t mw)
+{
+    budget_mw = mw;
+}
+
+uint8_t leds_get_cap(void)
+{
+    return capped(cur_r + cur_g + cur_b, level);
+}
+
+// Scale a level down until the frame fits the power budget: count pixels at (r+g+b)/765 of full white each.
+static uint8_t capped(uint32_t sum_rgb, uint8_t lvl)
+{
+    uint32_t need = (uint32_t)count * sum_rgb / 255 * lvl * LED_MW_PER_CHANNEL / 255;   // mW at this level
+    return need > budget_mw ? lvl * budget_mw / need : lvl;
+}
+
 static void show(uint8_t r, uint8_t g, uint8_t b, uint8_t lvl)
 {
-    for (int i = 0; i < NUM_LEDS; i++) {
-        if (i < count) {
-            pixel(i, r * lvl / 255, g * lvl / 255, b * lvl / 255);
-        } else {
-            pixel(i, 0, 0, 0);
-        }
+    lvl = capped(r + g + b, lvl);
+    for (int i = 0; i < count; i++) {
+        pixel(i, r * lvl / 255, g * lvl / 255, b * lvl / 255);
     }
     led_strip_refresh(strip);
 }
@@ -182,12 +200,11 @@ static void hsv(uint8_t h, uint8_t *r, uint8_t *g, uint8_t *b)
 void leds_rainbow_step(void)
 {
     hue++;
-    for (int i = 0; i < NUM_LEDS; i++) {
-        uint8_t r = 0, g = 0, b = 0;
-        if (i < count) {
-            hsv(hue + i * 256 / count, &r, &g, &b);
-        }
-        pixel(i, r * level / 255, g * level / 255, b * level / 255);
+    uint8_t lvl = capped(383, level);           // a full rainbow averages r+g+b = 383
+    for (int i = 0; i < count; i++) {
+        uint8_t r, g, b;
+        hsv(hue + i * 256 / count, &r, &g, &b);
+        pixel(i, r * lvl / 255, g * lvl / 255, b * lvl / 255);
     }
     led_strip_refresh(strip);
 }
