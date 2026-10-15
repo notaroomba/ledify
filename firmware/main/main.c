@@ -36,6 +36,8 @@
 #include "mic.h"
 #include "ble.h"
 #include "net.h"
+#include "ota.h"
+#include "esp_app_desc.h"
 
 static const char *TAG = "ledify";
 
@@ -299,9 +301,9 @@ static void status(char *out, size_t n)
     const pd_state_t *pd = pd_get();
     char net[96];
     net_status(net, sizeof net);
-    int w = snprintf(out, n, "{\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"color\":\"%s\",\"bright\":\"%s\",\"overlay\":\"%s\","
+    int w = snprintf(out, n, "{\"fw\":\"%s\",\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"color\":\"%s\",\"bright\":\"%s\",\"overlay\":\"%s\","
                      "\"auto\":%d,\"level\":%d,\"count\":%d,\"type\":\"%s\",\"cap\":%d",
-                     power, volt, effect_name(), color_names[color], sound_on ? "sound" : "level", overlay_names[overlay],
+                     esp_app_get_description()->version, power, volt, effect_name(), color_names[color], sound_on ? "sound" : "level", overlay_names[overlay],
                      auto_on, leds_get_level(), leds_get_count(), leds_type_name(), leds_get_cap());
     for (int i = 0; i < N_SETTINGS; i++) {
         w += snprintf(out + w, n - w, ",\"%s\":%d", settings[i].key, *settings[i].val);
@@ -420,7 +422,7 @@ static void handle(char *line)
     for (char *p = tok[0]; *p; p++) {
         *p = tolower((unsigned char)*p);
     }
-    bool keep_case = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "wifi2") || !strcmp(tok[0], "mqtt");   // credentials are case sensitive
+    bool keep_case = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "wifi2") || !strcmp(tok[0], "mqtt") || !strcmp(tok[0], "ota");   // credentials are case sensitive
     for (int i = 1; i < n && !keep_case; i++) {
         for (char *p = tok[i]; *p; p++) {
             *p = tolower((unsigned char)*p);
@@ -554,6 +556,8 @@ static void handle(char *line)
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
+    } else if (!strcmp(tok[0], "ota") && n == 2) {
+        reply(ota_start(tok[1]) ? "ok, downloading; the board restarts when done" : "err ota busy or bad url");
     } else if (!strcmp(tok[0], "wifi2") && (n == 2 || n == 3)) {   // "wifi2 off" clears the fallback
         reply(net_save_wifi2(n == 3 ? tok[1] : "", n == 3 ? tok[2] : "") ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -565,7 +569,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12> status pd net wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "volt<5|12> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -614,6 +618,7 @@ void app_main(void)
     ESP_LOGI(TAG, "%s", snap);
 
     int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0;
+    bool image_ok = false;
     uint32_t frame_max_us = 0, frames = 0;
     cmd_t cmd;
     for (;;) {
@@ -627,6 +632,10 @@ void app_main(void)
         if (now - last_sense > 500000) {
             sense();
             last_sense = now;
+        }
+        if (now > 30000000 && !image_ok) {              // survived 30 s after an OTA: keep this image
+            ota_mark_ok();
+            image_ok = true;
         }
         if (now - last_beat > 3000000) {
             const pd_state_t *pd = pd_get();

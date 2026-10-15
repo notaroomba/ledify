@@ -11,9 +11,10 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble |
 | `main/fft.c` | 256-point fixed-point FFT and the band sums, plain C (`test/fft_test.c` checks it on the host) |
 | `main/ble.c` | Nordic UART service on NimBLE |
-| `main/net.c` | Wi-Fi station, MQTT client, Home Assistant discovery |
+| `main/net.c` | Wi-Fi station (primary + fallback network), MQTT client, Home Assistant discovery |
+| `main/ota.c` | Over-the-air update: fetches an app image over Wi-Fi into the spare slot |
 | `main/board.h` | Pin map and tunables (pixel limits, frame rate, power budget, PD voltage, LED power settle time) |
-| `partitions.csv` | 16 MB flash: 24 KB NVS for settings, 4 MB app |
+| `partitions.csv` | 16 MB flash: 24 KB NVS for settings, two 4 MB app slots for OTA |
 | `creds.example.csv` | Template for the NVS settings image (Wi-Fi, broker, strip, lighting tunables) |
 
 ## Build and flash
@@ -54,6 +55,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
 | `wifi2 SSID PASSWORD` | Save a fallback network and restart (`wifi2 off` clears it). The board joins the primary first and switches after `WIFI_FAILS_BEFORE_SWITCH` failed attempts, alternating until one works |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
+| `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
 | `help` | Command list |
 
 Replies go to the log and, over BLE, to the TX characteristic. Every peripheral is probed at startup and skipped if it doesn't answer, so a board with a missing sensor still runs; sound styles on a board without a microphone answer `ok, no mic` and stay dark.
@@ -107,6 +109,20 @@ SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which 
 ## Power budget
 
 A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware never sends more than the supply can take: the budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract; each frame's brightness is scaled so `count × colour × LED_MW_PER_CHANNEL` fits. `status` reports the resulting `cap` next to the requested `level`. On a 15 W port 300 red pixels run at 108/255 and 300 white ones at 36/255; on a 100 W charger white gets about 240. The strip's own copper still can't carry that much, so inject power every 100 pixels or so on long 5 V runs.
+
+## Updating over the air
+
+Flash with the cable once to get the two-slot partition table; after that `ota URL` from the console, BLE or `ledify/<id>/cmd` pulls `ledify.bin` over Wi-Fi into the other slot, verifies it and restarts. `status` shows the running version as `fw` (the git describe of the build). The bootloader boots the new image on trial: if the board does not stay up for 30 s (`ota_mark_ok()` in `main.c`) the next reset falls back to the previous image, so a bad build never bricks it. The Wi-Fi radio never modem-sleeps, so commands and MQTT keepalives are not delayed.
+
+Two easy places to host the image:
+
+```bash
+# same network as the board (e.g. both on the hotspot): serve the build directory
+python3 -m http.server 8000 --directory firmware/build
+# then on the board:  ota http://<this computer's ip>:8000/ledify.bin
+```
+
+or attach `ledify.bin` to a GitHub release and use its `https://github.com/.../releases/download/...` URL; TLS is checked against the built-in certificate bundle and redirects are followed. Progress is logged every 10 %.
 
 ## Wi-Fi, MQTT and Home Assistant
 

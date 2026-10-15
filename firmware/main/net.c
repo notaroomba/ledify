@@ -318,6 +318,7 @@ void net_init(QueueHandle_t q)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     apply_wifi(0);
     ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_ps(WIFI_PS_NONE);          // mains powered: no modem sleep, so keepalives and commands are never late
     ESP_LOGI(TAG, "id %s, fallback network %s, mqtt %s", id, ssid2[0] ? ssid2 : "none", mqtt_url[0] ? mqtt_url : "not configured");
 }
 
