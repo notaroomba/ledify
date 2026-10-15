@@ -63,7 +63,9 @@ static QueueHandle_t cmd_q;
 
 // Saved tunables. The key is the command, the Home Assistant topic ledify/<id>/<key>/set and the status field.
 static int16_t gain = 25, lux_lo = 0, lux_hi = 500, night = 0, temp_lo = 15, temp_hi = 30;
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, N_SETTINGS };
+static int16_t limit;                       // see settings[]
+static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -71,6 +73,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"night", &night, 0, 1000},
     {"temp_lo", &temp_lo, -40, 100},
     {"temp_hi", &temp_hi, -40, 100},
+    {"limit", &limit, 0, 1},                 // 1 = dim to the power budget, 0 = send what was asked and warn
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -234,8 +237,9 @@ static bool set_setting(int i, int v)
         return false;
     }
     *settings[i].val = v;
-    save_i16(settings[i].key, v);
+    dirty_at = esp_timer_get_time();
     mic_set_gain(gain);
+    leds_set_limit(limit);
     return true;
 }
 
@@ -311,6 +315,12 @@ static void status(char *out, size_t n)
     }
     w += snprintf(out + w, n - w, ",\"pd\":{\"attached\":%d,\"ready\":%d,\"mv\":%d,\"ma\":%d},\"net\":\"%s\"",
                   pd->cc != 0, pd->ready, pd->contract_mv, pd->contract_ma, net);
+    w += snprintf(out + w, n - w, ",\"pdos\":[");
+    for (int i = 0; i < pd->n_pdos; i++) {
+        w += snprintf(out + w, n - w, "%s[%d,%d]", i ? "," : "", pd->pdo_mv[i], pd->pdo_ma[i]);
+    }
+    w += snprintf(out + w, n - w, "],\"need_mw\":%lu,\"budget_mw\":%lu",
+                  (unsigned long)leds_get_need_mw(), (unsigned long)leds_get_budget_mw());
     if (d.have_lux) {
         w += snprintf(out + w, n - w, ",\"lux\":%.1f", d.lux);
     }
@@ -336,7 +346,7 @@ static void publish(void)
     if (!net_mqtt_connected()) {
         return;
     }
-    static char light[160], st[640], sens[160];
+    static char light[160], st[768], sens[160];
     uint8_t r, g, b;
     leds_get_color(&r, &g, &b);
     snprintf(light, sizeof light,
@@ -429,7 +439,7 @@ static void handle(char *line)
             *p = tolower((unsigned char)*p);
         }
     }
-    static char out[640];
+    static char out[768];
     int s = setting_idx(tok[0]);
 
     if (!strcmp(tok[0], "on") && n == 1) {
@@ -465,7 +475,7 @@ static void handle(char *line)
             return;
         }
         leds_set_count(c);
-        save_count(c);
+        dirty_at = esp_timer_get_time();
         reply("ok");
     } else if (!strcmp(tok[0], "type") && n == 2) {
         if (!leds_set_type(tok[1])) {
@@ -532,8 +542,20 @@ static void handle(char *line)
         }
         const pd_state_t *pd = pd_get();
         if (v == 12 && !(pd->ready && pd->contract_mv >= 15000)) {
-            reply("err 12V needs a 15V+ PD contract");
-            return;
+            if (!pd_request(15000)) {                         // the charger offers nothing at 15 V or more
+                reply("err 12V needs a 15V+ charger");
+                return;
+            }
+            for (int i = 0; i < 80 && !(pd->ready && pd->contract_mv >= 15000); i++) {
+                vTaskDelay(pdMS_TO_TICKS(10));                // PS_RDY normally lands well inside 500 ms
+            }
+            if (!(pd->ready && pd->contract_mv >= 15000)) {
+                reply("err charger refused 15V");
+                return;
+            }
+        }
+        if (v == 5) {
+            pd_request(0);                                    // back to the most powerful offer
         }
         power = false;
         leds_select_12v(v == 12);
@@ -609,6 +631,7 @@ void app_main(void)
 
     leds_init();
     load_cfg();
+    leds_set_limit(limit);
     ESP_LOGI(TAG, "leds up, %d x %s", leds_get_count(), leds_type_name());
     vTaskDelay(pdMS_TO_TICKS(PD_START_DELAY_MS));
     pd_init(bus);
@@ -621,7 +644,7 @@ void app_main(void)
     ble_init(cmd_q);
     net_init(cmd_q);
 
-    static char snap[640];
+    static char snap[768];
     status(snap, sizeof snap);               // one snapshot in the log so sensors can be checked without BLE
     ESP_LOGI(TAG, "%s", snap);
 
@@ -665,6 +688,13 @@ void app_main(void)
             frame_max_us = 0;
             frames = 0;
             last_beat = now;
+        }
+        if (dirty_at && now - dirty_at > 2000000) {          // sliders send many values; write NVS once they settle
+            save_count(leds_get_count());
+            for (int i = 0; i < N_SETTINGS; i++) {
+                save_i16(settings[i].key, *settings[i].val);
+            }
+            dirty_at = 0;
         }
         if (now < live_until && now - last_live > LIVE_MS * 1000LL) {
             uint8_t b[3] = {0};

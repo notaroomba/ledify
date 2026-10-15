@@ -15,7 +15,7 @@
 #define FULL 32767             // RMS x gain at this value is "as loud as it gets"
 #define PEAK_DECAY 8           // peak follower loses 1/256 per block: about 2 s to fall by e
 #define BEAT_RATIO 150         // onset: a block this % above the 1 s running average...
-#define BEAT_MIN 2048          // ...and above this (gain applied), so a quiet room never beats
+#define BEAT_MIN 256           // ...and above this (gated, gain applied), so a quiet room never beats
 #define BEAT_HOLD 12           // blocks (100 ms) before the next onset counts
 
 static i2s_chan_handle_t rx;
@@ -26,6 +26,7 @@ static volatile uint16_t rms;  // Q15, latest block
 static volatile uint8_t loud, pulse, bands[3];
 static uint32_t peak, bpeak[3];
 static int32_t avg;
+static uint32_t floor_;        // running noise floor of x: drops at once, climbs slowly
 static int hold, nblock;
 static volatile uint32_t block_max_us, drops;   // real-time check, read and reset by mic_stats()
 static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
@@ -50,14 +51,24 @@ static void block(void)
     }
     rms = (uint32_t)sqrtf((float)(acc / N)) >> 8;
     uint32_t x = (uint32_t)rms * gain;
-    peak = x > peak ? x : peak - (peak >> PEAK_DECAY);
-    uint32_t l = x * 255 / (peak > FULL ? peak : FULL);
+    if (x < floor_) {
+        floor_ = x;
+    } else {
+        floor_ += (x - floor_) >> 9;                           // about 4 s to follow a louder room
+    }
+    uint32_t sig = x > floor_ * 3 / 2 ? x - floor_ * 3 / 2 : 0;   // only what sticks out 3.5 dB above the floor is sound
+    peak = sig > peak ? sig : peak - (peak >> PEAK_DECAY);
+    uint32_t ref = peak > floor_ + 64 ? peak : floor_ + 64;      // normalise to the recent peak, never to nothing
+    uint32_t l = sig * 255 / ref;
+    if (l > 255) {
+        l = 255;
+    }
     loud = l > loud ? l : loud - ((loud - l + 7) >> 3);     // instant attack, ~60 ms release
-    avg += ((int32_t)x - avg) / 128;
+    avg += ((int32_t)sig - avg) / 128;
     if (hold) {
         hold--;
     }
-    if (!hold && x > BEAT_MIN && x * 100 > (uint32_t)avg * BEAT_RATIO) {
+    if (!hold && sig > BEAT_MIN && sig * 100 > (uint32_t)avg * BEAT_RATIO) {
         pulse = 255;
         hold = BEAT_HOLD;
     } else {

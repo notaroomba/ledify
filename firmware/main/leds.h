@@ -13,7 +13,10 @@ uint8_t leds_get_level(void);
 void leds_set_count(uint16_t n);                // pixels driven, 1..MAX_LEDS
 uint16_t leds_get_count(void);
 void leds_set_budget_mw(uint32_t mw);           // power available to the strip; every frame is capped to fit
-uint8_t leds_get_cap(void);                     // the level the last frame actually went out at
+uint8_t leds_get_cap(void);
+void leds_set_limit(bool on);                   // scale frames to the budget; off = send what was asked and just report
+uint32_t leds_get_need_mw(void);                // estimated draw of the last frame at the requested level
+uint32_t leds_get_budget_mw(void);                     // the level the last frame actually went out at
 void leds_fill(uint8_t r, uint8_t g, uint8_t b);   // the solid colour
 void leds_get_color(uint8_t *r, uint8_t *g, uint8_t *b);
 void leds_set_temp(uint8_t pos);                // temperature colour: 0 blue, 128 white, 255 red

@@ -1,5 +1,5 @@
-// Minimal USB-PD sink on the FUSB302B: wait for Source_Capabilities, request the
-// highest fixed voltage up to PD_WANT_MV, and note when PS_RDY arrives.
+// Minimal USB-PD sink on the FUSB302B: wait for Source_Capabilities, request the fixed PDO with the
+// most power up to PD_WANT_MV (or the best one at 15 V+ while the 12 V output is on), and note PS_RDY.
 #include <string.h>
 #include "pd.h"
 #include "board.h"
@@ -24,6 +24,9 @@ static i2c_master_dev_handle_t dev;
 static uint8_t msg_id;
 static pd_state_t st;
 static int req_mv, req_ma;
+static int pdo_pos[7];                   // object position of each stored PDO in the source's list
+static int want_min_mv;                  // 15000 while the 12 V output is selected
+static bool rerequest;                   // main asked for a different contract; the PD task sends it
 static int64_t last_ask;
 static int asks;
 static void pd_poll(void);
@@ -143,8 +146,52 @@ void pd_init(i2c_master_bus_handle_t bus)
              st.cc, lvl[0], lvl[1], st.vbus, rd(R_STATUS0), rd(R_STATUS1));
 }
 
+// Request the fixed PDO with the most power (ties go to the higher voltage) between min_mv and PD_WANT_MV.
+static bool request_best(int min_mv)
+{
+    int best = -1;
+    long best_w = -1;
+    for (int i = 0; i < st.n_pdos; i++) {
+        int ma = st.pdo_ma[i] < PD_WANT_MA ? st.pdo_ma[i] : PD_WANT_MA;
+        long w = (long)st.pdo_mv[i] * ma;
+        if (st.pdo_mv[i] >= min_mv && st.pdo_mv[i] <= PD_WANT_MV &&
+            (w > best_w || (w == best_w && st.pdo_mv[i] > st.pdo_mv[best]))) {
+            best = i;
+            best_w = w;
+        }
+    }
+    if (best < 0) {
+        return false;
+    }
+    req_mv = st.pdo_mv[best];
+    req_ma = st.pdo_ma[best] < PD_WANT_MA ? st.pdo_ma[best] : PD_WANT_MA;
+    // bit 25 = USB communications capable: without it macOS disables USB data after the contract
+    uint32_t rdo = ((uint32_t)pdo_pos[best] << 28) | (1u << 25) | (1u << 24) |
+                   ((uint32_t)(req_ma / 10) << 10) | (uint32_t)(req_ma / 10);
+    send(DATA_REQUEST, &rdo, 1);
+    ESP_LOGI(TAG, "requesting %d mV %d mA", req_mv, req_ma);
+    return true;
+}
+
+bool pd_request(int min_mv)
+{
+    want_min_mv = min_mv;
+    for (int i = 0; i < st.n_pdos; i++) {
+        if (st.pdo_mv[i] >= min_mv && st.pdo_mv[i] <= PD_WANT_MV) {
+            rerequest = true;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void pd_poll(void)
 {
+    if (rerequest && st.n_pdos) {
+        rerequest = false;
+        st.ready = false;
+        request_best(want_min_mv);
+    }
     if (!dev || !st.cc) {
         return;
     }
@@ -181,31 +228,17 @@ static void pd_poll(void)
     ESP_LOGI(TAG, "rx header 0x%04x type %d objects %d", hdr, type, n);
 
     if (n > 0 && type == DATA_SRC_CAP) {
-        int best = -1, best_mv = -1;
         st.n_pdos = 0;
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n && st.n_pdos < 7; i++) {
             if (objs[i] >> 30) {
                 continue;                            // fixed-supply PDOs only
             }
-            int mv = ((objs[i] >> 10) & 0x3FF) * 50;
-            int ma = (objs[i] & 0x3FF) * 10;
-            st.pdo_mv[st.n_pdos] = mv;
-            st.pdo_ma[st.n_pdos] = ma;
+            st.pdo_mv[st.n_pdos] = ((objs[i] >> 10) & 0x3FF) * 50;
+            st.pdo_ma[st.n_pdos] = (objs[i] & 0x3FF) * 10;
+            pdo_pos[st.n_pdos] = i + 1;              // the Request names the PDO by its 1-based position
             st.n_pdos++;
-            if (mv <= PD_WANT_MV && mv > best_mv) {
-                best = i;
-                best_mv = mv;
-                req_mv = mv;
-                req_ma = ma < PD_WANT_MA ? ma : PD_WANT_MA;
-            }
         }
-        if (best >= 0) {
-            // bit 25 = USB communications capable: without it macOS disables USB data after the contract
-            uint32_t rdo = ((uint32_t)(best + 1) << 28) | (1u << 25) | (1u << 24) |
-                           ((uint32_t)(req_ma / 10) << 10) | (uint32_t)(req_ma / 10);
-            send(DATA_REQUEST, &rdo, 1);
-            ESP_LOGI(TAG, "requesting %d mV %d mA", req_mv, req_ma);
-        }
+        request_best(want_min_mv);
     } else if (n == 0 && type == CTRL_PS_RDY) {
         st.contract_mv = req_mv;
         st.contract_ma = req_ma;

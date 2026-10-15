@@ -13,3 +13,4 @@ typedef struct {
 
 void pd_init(i2c_master_bus_handle_t bus);   // also starts the PD task
 const pd_state_t *pd_get(void);
+bool pd_request(int min_mv);                  // renegotiate: most power at min_mv or above; false if nothing offered

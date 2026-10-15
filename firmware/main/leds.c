@@ -27,6 +27,8 @@ static led_strip_handle_t strip;
 static uint8_t level = 128;
 static uint16_t count = NUM_LEDS;
 static uint32_t budget_mw = LED_BUDGET_NO_PD_MW;
+static uint32_t need_mw;                   // the last frame's estimated draw at the requested level
+static bool limit_on;                      // scale brightness to the budget (else just report)
 static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour set gives white
 static uint8_t hue, temp_pos = 128, last_cap;
 static uint8_t fb[MAX_LEDS][3];                          // one frame at full brightness, before the power cap
@@ -191,6 +193,7 @@ static uint8_t capped(uint32_t sum, uint8_t lvl)
 {
     uint32_t dark = (uint32_t)count * LED_DARK_MW;
     uint32_t lit = sum / 255 * lvl / 255;                          // mW at this level, pixels only
+    need_mw = dark + lit;
     if (dark + lit <= budget_mw || lit == 0) {
         return lvl;
     }
@@ -234,8 +237,24 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         sum += p[0] * LED_RED_MW + p[1] * LED_GREEN_MW + p[2] * LED_BLUE_MW;
     }
     last_cap = capped(sum, lvl);
+    uint8_t use = limit_on ? last_cap : lvl;
     for (int i = 0; i < count; i++) {
-        pixel(i, fb[i][0] * last_cap / 255, fb[i][1] * last_cap / 255, fb[i][2] * last_cap / 255);
+        pixel(i, fb[i][0] * use / 255, fb[i][1] * use / 255, fb[i][2] * use / 255);
     }
     led_strip_refresh(strip);
+}
+
+void leds_set_limit(bool on)
+{
+    limit_on = on;
+}
+
+uint32_t leds_get_need_mw(void)
+{
+    return need_mw;
+}
+
+uint32_t leds_get_budget_mw(void)
+{
+    return budget_mw;
 }
