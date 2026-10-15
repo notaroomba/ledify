@@ -6,7 +6,7 @@
 //   color solid|rainbow|temp|spectrum|meter | bright level|sound | overlay none|vu|pulse | auto on|off
 //   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
 //   temp 21.5                                      feed a temperature in for the temp colour
-//   volt 5 | volt 12 | status | pd | net | help
+//   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 | status | pd | net | help
 //   wifi SSID PASSWORD | wifi2 SSID PASSWORD | mqtt URL [USER PASSWORD]   (saved to NVS, then the board restarts)
 // Home Assistant talks JSON to ledify/<id>/light/set; see net.c for the topics.
 //
@@ -55,6 +55,7 @@ static bool sound_on, auto_on, dark;        // dark: under the night threshold
 static int lux = -1;                        // latest reading, -1 without a sensor
 static float temp_in;                       // fed in over MQTT; the barometer's until then. ponytail: never expires, add a timeout if Home Assistant going away should fall back
 static bool have_temp_in;
+static int64_t live_until;                  // "live N": stream loudness/bands to MQTT until then
 static bool power;
 static int volt = 5;
 static bool have_mic;
@@ -410,10 +411,10 @@ static void handle(char *line)
         handle_json(line);
         return;
     }
-    char *tok[5] = {0};
+    char *tok[8] = {0};
     int n = 0;
     char *save;
-    for (char *t = strtok_r(line, " \r\n", &save); t && n < 5; t = strtok_r(NULL, " \r\n", &save)) {
+    for (char *t = strtok_r(line, " \r\n", &save); t && n < 8; t = strtok_r(NULL, " \r\n", &save)) {
         tok[n++] = t;
     }
     if (!n) {
@@ -556,6 +557,13 @@ static void handle(char *line)
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
+    } else if (!strcmp(tok[0], "live") && n == 2) {
+        int s = atoi(tok[1]);
+        live_until = esp_timer_get_time() + (s < 0 ? 0 : s > 600 ? 600 : s) * 1000000LL;
+        reply("ok");
+    } else if (!strcmp(tok[0], "audio") && n == 6) {              // 20 Hz from the panel: no reply, no state publish
+        uint8_t b[3] = {atoi(tok[2]), atoi(tok[3]), atoi(tok[4])};
+        mic_feed(atoi(tok[1]), b, atoi(tok[5]));
     } else if (!strcmp(tok[0], "ota") && n == 2) {
         reply(ota_start(tok[1]) ? "ok, downloading; the board restarts when done" : "err ota busy or bad url");
     } else if (!strcmp(tok[0], "wifi2") && (n == 2 || n == 3)) {   // "wifi2 off" clears the fallback
@@ -569,7 +577,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "volt<5|12> live<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -617,16 +625,19 @@ void app_main(void)
     status(snap, sizeof snap);               // one snapshot in the log so sensors can be checked without BLE
     ESP_LOGI(TAG, "%s", snap);
 
-    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0;
+    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0, last_live = 0;
     bool image_ok = false;
     uint32_t frame_max_us = 0, frames = 0;
     cmd_t cmd;
     for (;;) {
         leds_set_budget_mw(power_budget_mw());
         if (xQueueReceive(cmd_q, &cmd, 0)) {
+            bool quiet = !strncmp(cmd.text, "audio ", 6);
             handle(cmd.text);
             frame();
-            publish();
+            if (!quiet) {
+                publish();
+            }
         }
         int64_t now = esp_timer_get_time();
         if (now - last_sense > 500000) {
@@ -655,7 +666,18 @@ void app_main(void)
             frames = 0;
             last_beat = now;
         }
-        if (now - last_pub > 30000000) {
+        if (now < live_until && now - last_live > LIVE_MS * 1000LL) {
+            uint8_t b[3] = {0};
+            if (have_mic) {
+                mic_bands(b);
+            }
+            char live[96];
+            snprintf(live, sizeof live, "{\"loud\":%d,\"bands\":[%d,%d,%d],\"pulse\":%d,\"db\":%.0f,\"cap\":%d}",
+                     have_mic ? mic_loud() : 0, b[0], b[1], b[2], have_mic ? mic_pulse() : 0, have_mic ? mic_db() : 0.0f, leds_get_cap());
+            net_publish_live(live);
+            last_live = now;
+        }
+        if (now - last_pub > PUBLISH_MS * 1000LL) {
             publish();
             last_pub = now;
         }

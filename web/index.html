@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledify</title>
+<style>
+  :root { --bg: #0f1115; --card: #181b22; --line: #262b35; --text: #e8eaf0; --muted: #8b93a7; --accent: #5ad1ff; --ok: #4ade80; --bad: #f87171; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: .04em; }
+  .pill { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--line); color: var(--muted); }
+  .pill.on { background: #123b24; color: var(--ok); } .pill.off { background: #3b1212; color: var(--bad); }
+  main { max-width: 760px; margin: 0 auto; padding: 12px 16px 40px; display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row > label { color: var(--muted); font-size: 13px; min-width: 70px; }
+  input, select, button { font: inherit; color: var(--text); background: #0f1218; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  input[type=range] { flex: 1; min-width: 140px; padding: 0; }
+  input[type=color] { width: 54px; height: 38px; padding: 2px; }
+  input[type=number] { width: 86px; }
+  button { cursor: pointer; } button.primary { background: var(--accent); color: #06202b; border-color: transparent; font-weight: 600; }
+  button.sel { border-color: var(--accent); color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+  .tile { background: #0f1218; border-radius: 10px; padding: 10px; }
+  .tile b { display: block; font-size: 20px; } .tile span { color: var(--muted); font-size: 12px; }
+  .bar { height: 10px; background: #0f1218; border-radius: 999px; overflow: hidden; } .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4ade80, #facc15, #f87171); transition: width .1s; }
+  .switch { width: 46px; height: 26px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; border: 0; padding: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch.on { background: var(--ok); } .switch.on::after { left: 23px; }
+  #log { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); max-height: 160px; overflow: auto; white-space: pre-wrap; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: #333; } .dot.on { background: #fff; box-shadow: 0 0 12px #fff; }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header><h1>LEDIFY</h1><span id="conn" class="pill">not connected</span></header>
+<main>
+  <section class="card" id="login">
+    <h2>Broker</h2>
+    <div class="row"><label>URL</label><input id="url" style="flex:1;min-width:220px" value="wss://mosquitto-production-595e.up.railway.app"></div>
+    <div class="row" style="margin-top:8px"><label>User</label><input id="user" value="ledify"></div>
+    <div class="row" style="margin-top:8px"><label>Password</label><input id="pass" type="password" autocomplete="current-password"></div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="connect">Connect</button><span class="muted" id="loginmsg">Saved in this browser only.</span></div>
+  </section>
+
+  <div id="app" hidden>
+    <section class="card">
+      <h2>Device</h2>
+      <div class="row">
+        <select id="device"></select>
+        <span id="online" class="pill">?</span>
+        <span class="muted" id="fw"></span>
+        <button id="disconnect" style="margin-left:auto">Forget broker</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Light</h2>
+      <div class="row">
+        <label>Power</label><button class="switch" id="power"></button>
+        <label style="margin-left:14px">Colour</label><input type="color" id="color" value="#ffffff">
+      </div>
+      <div class="chips" id="palette" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px"><label>Brightness</label><input type="range" id="level" min="0" max="255"><span id="levelv" class="muted" style="width:48px"></span></div>
+      <div class="row" style="margin-top:10px"><label>Effect</label><div class="chips" id="effects"></div></div>
+      <div class="row" style="margin-top:10px"><label>Overlay</label><div class="chips" id="overlays"></div></div>
+      <div class="row" style="margin-top:10px"><label>Auto dim</label><button class="switch" id="auto"></button><span class="muted">brightness follows the light sensor</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Live</h2>
+      <div class="tiles">
+        <div class="tile"><b id="lux">–</b><span>lux</span></div>
+        <div class="tile"><b id="temp">–</b><span>°C</span></div>
+        <div class="tile"><b id="kpa">–</b><span>kPa</span></div>
+        <div class="tile"><b id="db">–</b><span>dB</span></div>
+        <div class="tile"><b id="cap">–</b><span>cap / level</span></div>
+        <div class="tile"><b id="pd">–</b><span>USB-PD</span></div>
+      </div>
+      <div class="row" style="margin-top:10px"><label>Loudness</label><div class="bar" style="flex:1"><i id="loud"></i></div><span id="pulse" class="dot"></span></div>
+      <div class="row" style="margin-top:6px"><label>Bass</label><div class="bar" style="flex:1"><i id="b0" style="background:#f87171"></i></div></div>
+      <div class="row" style="margin-top:6px"><label>Mid</label><div class="bar" style="flex:1"><i id="b1" style="background:#4ade80"></i></div></div>
+      <div class="row" style="margin-top:6px"><label>Treble</label><div class="bar" style="flex:1"><i id="b2" style="background:#5ad1ff"></i></div></div>
+      <div class="muted" id="net" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <h2>Audio from this device</h2>
+      <p class="muted" style="margin:0 0 8px">Play a file or use this device's microphone; the loudness, bass, mid and treble go to the board 20 times a second and drive the sound, vu, pulse and spectrum styles instead of its own mic.</p>
+      <div class="row"><input type="file" id="afile" accept="audio/*"><button id="aplay">Play</button><button id="amic">Use microphone</button><button id="astop">Stop</button><span id="astate" class="pill">idle</span></div>
+      <div class="row" style="margin-top:8px"><label>Sensitivity</label><input type="range" id="asens" min="1" max="10" value="4"></div>
+      <audio id="aelem" controls style="width:100%;margin-top:8px" hidden></audio>
+    </section>
+
+    <section class="card">
+      <h2>Presets</h2>
+      <div class="row"><input id="pname" placeholder="name" style="flex:1;min-width:120px"><button id="psave">Save current</button></div>
+      <div class="chips" id="presets" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <h2>Strip and tuning</h2>
+      <div class="row"><label>Pixels</label><input type="number" id="count" min="1" max="1000">
+        <label>Chip</label><select id="type"><option>ws2812</option><option>ws2811</option><option>sk6812</option><option>sk6812w</option><option>ws2816</option></select>
+        <label>Volts</label><select id="volt"><option>5</option><option>12</option></select></div>
+      <div class="row" style="margin-top:8px"><label>Mic gain</label><input type="range" id="gain" min="1" max="100"><span id="gainv" class="muted" style="width:40px"></span></div>
+      <div class="row" style="margin-top:8px"><label>Lux range</label><input type="number" id="lux_lo"><input type="number" id="lux_hi"><label>Night below</label><input type="number" id="night"></div>
+      <div class="row" style="margin-top:8px"><label>Temp range</label><input type="number" id="temp_lo"><input type="number" id="temp_hi"><label>Feed temp</label><input type="number" id="temp_in" step="0.5" placeholder="°C"><button id="sendtemp">Send</button></div>
+    </section>
+
+    <section class="card">
+      <h2>Firmware</h2>
+      <div class="row"><input id="otaurl" style="flex:1;min-width:240px" value="https://ledify.notaroomba.dev/firmware/ledify.bin"><button id="ota">Update over the air</button></div>
+      <div class="row" style="margin-top:10px"><input id="cmd" style="flex:1;min-width:200px" placeholder="any command, e.g. status"><button id="send">Send</button></div>
+      <div id="log" style="margin-top:10px"></div>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
+<script>
+// Ledify control panel: talks MQTT over WebSockets straight to the broker, same topics the board uses.
+const $ = id => document.getElementById(id);
+const EFFECTS = ['solid', 'rainbow', 'temp', 'spectrum', 'meter', 'sound', 'vu', 'pulse'];
+const OVERLAYS = ['none', 'vu', 'pulse'];
+const devices = {};
+let client, current, dragging = false;
+
+function log(s) { const l = $('log'); l.textContent = (new Date().toLocaleTimeString() + '  ' + s + '\n' + l.textContent).slice(0, 4000); }
+function chips(host, names, onpick) {
+  names.forEach(n => { const b = document.createElement('button'); b.textContent = n; b.dataset.v = n; b.onclick = () => onpick(n); host.appendChild(b); });
+}
+function mark(host, v) { [...host.children].forEach(b => b.classList.toggle('sel', b.dataset.v === v)); }
+function send(cmd) {
+  if (!client || !current) return;
+  client.publish('ledify/' + current + '/cmd', cmd);
+  log('> ' + cmd);
+}
+
+// ---- connection
+function creds() { return { url: $('url').value.trim(), user: $('user').value.trim(), pass: $('pass').value }; }
+function connect(c) {
+  $('conn').textContent = 'connecting'; $('conn').className = 'pill';
+  if (client) client.end(true);
+  client = mqtt.connect(c.url, { username: c.user, password: c.pass, keepalive: 30, reconnectPeriod: 2000, clientId: 'panel-' + Math.random().toString(16).slice(2, 8) });
+  client.on('connect', () => {
+    $('conn').textContent = 'connected'; $('conn').className = 'pill on';
+    localStorage.setItem('ledify.creds', JSON.stringify(c));
+    $('login').hidden = true; $('app').hidden = false;
+    client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live']);
+    keepLive();
+  });
+  client.on('error', e => { $('loginmsg').textContent = 'Broker said: ' + e.message; $('conn').textContent = 'error'; $('conn').className = 'pill off'; });
+  client.on('close', () => { $('conn').textContent = 'reconnecting'; $('conn').className = 'pill off'; });
+  client.on('message', (topic, payload) => {
+    const m = topic.match(/^ledify\/([^/]+)\/(.+)$/); if (!m) return;
+    const id = m[1], what = m[2], d = devices[id] || (devices[id] = {});
+    const text = payload.toString();
+    if (what === 'status') d.online = text === 'online';
+    else { try { d[what] = JSON.parse(text); } catch (e) { return; } }
+    if (what === 'live') { if (id === current) renderLive(d.live); return; }
+    d.seen = Date.now();
+    if (!current) { current = id; }
+    renderDevices();
+    if (id === current) render(d, what);
+  });
+}
+$('connect').onclick = () => connect(creds());
+$('disconnect').onclick = () => { localStorage.removeItem('ledify.creds'); location.reload(); };
+const saved = localStorage.getItem('ledify.creds');
+if (saved) { const c = JSON.parse(saved); $('url').value = c.url; $('user').value = c.user; $('pass').value = c.pass; connect(c); }
+
+// ---- rendering
+function renderDevices() {
+  const sel = $('device');
+  const ids = Object.keys(devices).sort();
+  if (sel.options.length !== ids.length) { sel.innerHTML = ''; ids.forEach(id => sel.add(new Option(id, id))); }
+  sel.value = current;
+  const d = devices[current] || {};
+  $('online').textContent = d.online ? 'online' : 'offline'; $('online').className = 'pill ' + (d.online ? 'on' : 'off');
+}
+$('device').onchange = () => { current = $('device').value; render(devices[current], 'all'); send('status'); keepLive(); };
+
+// The board streams loudness/bands at 10 Hz while a lease is active; renew it while this tab is visible.
+function keepLive() { if (current && document.visibilityState === 'visible') send('live 90'); }
+setInterval(keepLive, 60000);
+document.addEventListener('visibilitychange', keepLive);
+function renderLive(v) {
+  $('loud').style.width = (v.loud * 100 / 255) + '%';
+  for (let k = 0; k < 3; k++) $('b' + k).style.width = (v.bands[k] * 100 / 255) + '%';
+  $('pulse').classList.toggle('on', v.pulse > 128);
+  $('db').textContent = v.db; $('cap').textContent = v.cap + ' / ' + ($('level').value || '');
+}
+
+// ---- audio feed: Web Audio analysis of a file or this device's mic, sent as "audio L B M T P" at 20 Hz
+let actx, analyser, asrc, atimer, apeak = 1, bpeak = [1, 1, 1], aavg = 0, apulse = 0;
+function astart(node) {
+  analyser = actx.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.4;
+  node.connect(analyser);
+  const td = new Uint8Array(analyser.fftSize), fd = new Uint8Array(analyser.frequencyBinCount);
+  const hz = actx.sampleRate / analyser.fftSize, edges = [20, 250, 2000, 8000].map(f => Math.round(f / hz));
+  clearInterval(atimer);
+  atimer = setInterval(() => {
+    analyser.getByteTimeDomainData(td); analyser.getByteFrequencyData(fd);
+    let acc = 0; for (const x of td) { const v = (x - 128) / 128; acc += v * v; }
+    const rms = Math.sqrt(acc / td.length) * $('asens').value;
+    apeak = Math.max(rms, apeak * 0.995, 0.05);
+    const loud = Math.min(255, Math.round(rms / apeak * 255));
+    const bands = [];
+    for (let k = 0; k < 3; k++) {
+      let m = 0; for (let i = edges[k]; i < edges[k + 1]; i++) m = Math.max(m, fd[i]);
+      bpeak[k] = Math.max(m, bpeak[k] * 0.995, 40);
+      bands.push(Math.min(255, Math.round(m / bpeak[k] * 255)));
+    }
+    aavg += (rms - aavg) / 20;
+    if (rms > 1.5 * aavg && rms > 0.05) apulse = 255; else apulse = Math.round(apulse * 0.8);
+    if (client && current) client.publish('ledify/' + current + '/audio/set', loud + ' ' + bands.join(' ') + ' ' + apulse);
+    renderLive({ loud, bands, pulse: apulse, db: $('db').textContent, cap: $('cap').textContent.split(' /')[0] });
+  }, 50);
+  $('astate').textContent = 'feeding'; $('astate').className = 'pill on';
+}
+function actxInit() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); }
+$('aplay').onclick = async () => {
+  const f = $('afile').files[0]; if (!f) { $('astate').textContent = 'pick a file first'; return; }
+  actxInit(); astop();
+  const a = $('aelem'); a.hidden = false; a.src = URL.createObjectURL(f);
+  asrc = actx.createMediaElementSource(a); asrc.connect(actx.destination); astart(asrc); a.play();
+};
+$('amic').onclick = async () => {
+  try { actxInit(); astop(); const st = await navigator.mediaDevices.getUserMedia({ audio: true }); asrc = actx.createMediaStreamSource(st); asrc.stream = st; astart(asrc); }
+  catch (e) { $('astate').textContent = 'mic: ' + e.message; }
+};
+function astop() {
+  clearInterval(atimer); atimer = null;
+  if (asrc) { try { asrc.disconnect(); if (asrc.stream) asrc.stream.getTracks().forEach(t => t.stop()); } catch (e) {} asrc = null; }
+  const a = $('aelem'); a.pause(); a.hidden = true;
+  $('astate').textContent = 'idle'; $('astate').className = 'pill';
+}
+$('astop').onclick = astop;
+
+// ---- presets (this browser) and a quick palette
+const PALETTE = ['#ffffff', '#ff8c00', '#ffd700', '#ff0040', '#ff00ff', '#8000ff', '#0080ff', '#00ff80'];
+PALETTE.forEach(c => { const b = document.createElement('button'); b.className = 'swatch'; b.style.background = c; b.title = c; b.onclick = () => { $('color').value = c; $('color').oninput(); }; $('palette').appendChild(b); });
+function presets() { try { return JSON.parse(localStorage.getItem('ledify.presets') || '{}'); } catch (e) { return {}; } }
+function renderPresets() {
+  const host = $('presets'); host.innerHTML = '';
+  for (const [name, p] of Object.entries(presets())) {
+    const b = document.createElement('button'); b.textContent = name;
+    b.onclick = () => { send('rgb ' + p.rgb); send('level ' + p.level); send('mode ' + p.mode); if (p.overlay) send('overlay ' + p.overlay); send('auto ' + (p.auto ? 'on' : 'off')); send('gain ' + p.gain); if (p.power) send('on'); };
+    const x = document.createElement('button'); x.textContent = '✕'; x.title = 'delete'; x.onclick = () => { const all = presets(); delete all[name]; localStorage.setItem('ledify.presets', JSON.stringify(all)); renderPresets(); };
+    host.appendChild(b); host.appendChild(x);
+  }
+}
+$('psave').onclick = () => {
+  const d = devices[current] || {}, s = d.state || {}, l = d['light/state'] || {}, name = $('pname').value.trim() || 'preset ' + (Object.keys(presets()).length + 1);
+  const c = l.color || { r: 255, g: 255, b: 255 };
+  const all = presets(); all[name] = { rgb: c.r + ' ' + c.g + ' ' + c.b, level: s.level, mode: s.mode, overlay: s.overlay, auto: s.auto, gain: s.gain, power: s.power };
+  localStorage.setItem('ledify.presets', JSON.stringify(all)); $('pname').value = ''; renderPresets();
+};
+renderPresets();
+
+function render(d, what) {
+  const s = d.state, l = d['light/state'], z = d.sensors;
+  if (s && (what === 'state' || what === 'all')) {
+    $('fw').textContent = s.fw ? 'fw ' + s.fw : '';
+    $('power').classList.toggle('on', !!s.power);
+    if (!dragging) { $('level').value = s.level; $('levelv').textContent = s.level; }
+    mark($('effects'), s.mode); mark($('overlays'), s.overlay);
+    $('auto').classList.toggle('on', !!s.auto);
+    $('cap').textContent = s.cap + ' / ' + s.level;
+    $('pd').textContent = s.pd && s.pd.ready ? (s.pd.mv / 1000) + ' V ' + (s.pd.ma / 1000) + ' A' : (s.pd && s.pd.attached ? 'no contract' : 'none');
+    $('net').textContent = s.net || '';
+    $('loud').style.width = ((s.loud || 0) * 100 / 255) + '%';
+    for (const k of ['count', 'gain', 'lux_lo', 'lux_hi', 'night', 'temp_lo', 'temp_hi']) if (k in s && document.activeElement !== $(k)) $(k).value = s[k];
+    $('gainv').textContent = s.gain; $('type').value = s.type; $('volt').value = s.volt;
+    if ('lux' in s) $('lux').textContent = Math.round(s.lux);
+    if ('temp_c' in s) $('temp').textContent = s.temp_c.toFixed(1);
+    if ('pressure_pa' in s) $('kpa').textContent = (s.pressure_pa / 1000).toFixed(2);
+    if ('sound_db' in s) $('db').textContent = s.sound_db.toFixed(0);
+  }
+  if (z && (what === 'sensors' || what === 'all')) {
+    $('lux').textContent = Math.round(z.lux); $('temp').textContent = z.temp_c.toFixed(1);
+    $('kpa').textContent = z.pressure_kpa.toFixed(2); $('db').textContent = z.sound_db.toFixed(0);
+  }
+  if (l && (what === 'light/state' || what === 'all') && l.color) {
+    const h = v => ('0' + v.toString(16)).slice(-2);
+    $('color').value = '#' + h(l.color.r) + h(l.color.g) + h(l.color.b);
+  }
+}
+
+// ---- controls
+chips($('effects'), EFFECTS, n => send('mode ' + n));
+chips($('overlays'), OVERLAYS, n => send('overlay ' + n));
+$('power').onclick = () => send($('power').classList.contains('on') ? 'off' : 'on');
+$('auto').onclick = () => send('auto ' + ($('auto').classList.contains('on') ? 'off' : 'on'));
+$('color').oninput = () => { const v = $('color').value; send('rgb ' + parseInt(v.slice(1, 3), 16) + ' ' + parseInt(v.slice(3, 5), 16) + ' ' + parseInt(v.slice(5, 7), 16)); };
+let levelTimer;
+$('level').oninput = () => { dragging = true; $('levelv').textContent = $('level').value; clearTimeout(levelTimer); levelTimer = setTimeout(() => send('level ' + $('level').value), 120); };
+$('level').onchange = () => { dragging = false; send('level ' + $('level').value); };
+$('gain').oninput = () => { $('gainv').textContent = $('gain').value; };
+$('gain').onchange = () => send('gain ' + $('gain').value);
+$('count').onchange = () => send('count ' + $('count').value);
+$('type').onchange = () => send('type ' + $('type').value);
+$('volt').onchange = () => { if ($('volt').value === '5' || confirm('Switch the strip output to 12 V? Only for 12 V strips.')) send('volt ' + $('volt').value); else $('volt').value = '5'; };
+for (const k of ['lux_lo', 'lux_hi']) $(k).onchange = () => send('lux ' + $('lux_lo').value + ' ' + $('lux_hi').value);
+for (const k of ['temp_lo', 'temp_hi']) $(k).onchange = () => send('temp ' + $('temp_lo').value + ' ' + $('temp_hi').value);
+$('night').onchange = () => send('night ' + $('night').value);
+$('sendtemp').onclick = () => { if ($('temp_in').value !== '') send('temp ' + $('temp_in').value); };
+$('ota').onclick = () => { if (confirm('Update the firmware from\n' + $('otaurl').value + ' ?')) send('ota ' + $('otaurl').value); };
+$('send').onclick = () => { if ($('cmd').value.trim()) { send($('cmd').value.trim()); $('cmd').value = ''; } };
+$('cmd').onkeydown = e => { if (e.key === 'Enter') $('send').onclick(); };
+</script>
+</body>
+</html>

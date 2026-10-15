@@ -28,6 +28,13 @@ static uint32_t peak, bpeak[3];
 static int32_t avg;
 static int hold, nblock;
 static volatile uint32_t block_max_us, drops;   // real-time check, read and reset by mic_stats()
+static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
+static volatile int64_t fed_at;
+
+static bool fed(void)
+{
+    return fed_at && esp_timer_get_time() - fed_at < MIC_FEED_HOLD_MS * 1000LL;
+}
 
 // One 8 ms block: RMS -> gain -> peak follower -> loudness, onset detection, and the FFT bands every 4th block.
 static void block(void)
@@ -129,18 +136,18 @@ void mic_set_gain(uint8_t g)
 
 uint8_t mic_loud(void)
 {
-    return loud;
+    return fed() ? fed_loud : loud;
 }
 
 uint8_t mic_pulse(void)
 {
-    return pulse;
+    return fed() ? fed_pulse : pulse;
 }
 
 void mic_bands(uint8_t out[3])
 {
     for (int k = 0; k < 3; k++) {
-        out[k] = bands[k];
+        out[k] = fed() ? fed_bands[k] : bands[k];
     }
 }
 
@@ -158,4 +165,14 @@ void mic_stats(uint32_t *max_us, uint32_t *dropped)
     *dropped = drops;
     block_max_us = 0;
     drops = 0;
+}
+
+void mic_feed(uint8_t l, const uint8_t b[3], uint8_t p)
+{
+    fed_loud = l;
+    for (int k = 0; k < 3; k++) {
+        fed_bands[k] = b[k];
+    }
+    fed_pulse = p;
+    fed_at = esp_timer_get_time();
 }

@@ -14,3 +14,4 @@ bool net_mqtt_connected(void);
 // Publish state. light_json follows Home Assistant's JSON light schema; status_json is the
 // full status() output; sensors_json carries the readings used by the discovered sensors.
 void net_publish(const char *light_json, const char *status_json, const char *sensors_json);
+void net_publish_live(const char *json);   // not retained, QoS 0

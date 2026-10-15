@@ -56,6 +56,8 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `wifi2 SSID PASSWORD` | Save a fallback network and restart (`wifi2 off` clears it). The board joins the primary first and switches after `WIFI_FAILS_BEFORE_SWITCH` failed attempts, alternating until one works |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
+| `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
+| `audio L B M T P` | Feed loudness, bass, mid, treble and pulse (0-255) from outside; overrides the microphone for 1 s per packet |
 | `help` | Command list |
 
 Replies go to the log and, over BLE, to the TX characteristic. Every peripheral is probed at startup and skipped if it doesn't answer, so a board with a missing sensor still runs; sound styles on a board without a microphone answer `ok, no mic` and stay dark.
@@ -108,7 +110,7 @@ SIG is 3.3 V logic. 5 V chips specify a high level of 0.7 × VDD (3.5 V), which 
 
 ## Power budget
 
-A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware never sends more than the supply can take: the budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract; each frame's brightness is scaled so `count × colour × LED_MW_PER_CHANNEL` fits. `status` reports the resulting `cap` next to the requested `level`. On a 15 W port 300 red pixels run at 108/255 and 300 white ones at 36/255; on a 100 W charger white gets about 240. The strip's own copper still can't carry that much, so inject power every 100 pixels or so on long 5 V runs.
+A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a laptop port gives 3 A. The firmware never sends more than the supply can take, the same way [FastLED's power model](https://fastled.io/docs/dc/d4d/struct_power_model_r_g_b.html) and [WLED's automatic brightness limiter](https://wled.discourse.group/t/automatic-brightness-limiter-confusion/10821) do: every frame's draw is estimated from each pixel's colour (`LED_RED_MW` 80, `LED_GREEN_MW` 55, `LED_BLUE_MW` 75 at full, FastLED's 16/11/15 mA WS2812 figures at 5 V) plus `LED_DARK_MW` 5 per pixel for the idle current, and the brightness is scaled so the total fits the budget. The budget is the PD contract minus buck losses (`LED_BUCK_EFF_PCT`), capped at the buck's 10 A, or 7.5 W when there is no contract. `status` reports the resulting `cap` next to the requested `level`; on a 15 W port 300 red pixels run at about 108/255 and 300 white ones at about 36/255, on a 100 W charger white gets about 240. Like WLED's limiter this is arithmetic, not a measurement: [measured draw varies by batch](https://pjrc.com/how-much-current-do-ws2812-neopixel-leds-really-use), so adjust the per-channel numbers if a meter disagrees, and it cannot see voltage drop along the strip, so inject power every 100 pixels or so on long 5 V runs.
 
 ## Updating over the air
 
@@ -135,6 +137,8 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | `ledify/<id>/cmd` | in | Any text command from the table above |
 | `ledify/<id>/light/set` | in | Home Assistant JSON light: `{"state":"ON","brightness":128,"color":{"r":255,"g":0,"b":0},"effect":"rainbow"}` |
 | `ledify/<id>/KEY/set` | in | A bare value, run as the command `KEY value`. The Home Assistant entities use `count`, `type`, `auto` (`ON`/`OFF`), `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`; `temp` feeds a temperature in for the `temp` colour |
+| `ledify/<id>/audio/set` | in | `L B M T P` from the web panel's audio analysis (file or microphone) |
+| `ledify/<id>/live` | out | `{"loud","bands","pulse","db","cap"}` at 10 Hz while a `live` lease is active |
 | `ledify/<id>/light/state` | out | JSON light state |
 | `ledify/<id>/state` | out | Same JSON as `status` |
 | `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}` (kPa, approximate dB SPL) |

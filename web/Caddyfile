@@ -1,0 +1,15 @@
+{
+	admin off
+	persist_config off
+	auto_https off
+	servers {
+		trusted_proxies static 0.0.0.0/0 ::/0
+	}
+}
+
+:{$PORT:3000} {
+	root * /srv
+	encode gzip
+	file_server
+	header /firmware/* Cache-Control "no-cache"
+}

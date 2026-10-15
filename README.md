@@ -102,6 +102,7 @@ The firmware in [`firmware/`](firmware/) is an ESP-IDF v6.1 project with drivers
 | `pd` / `net`          | The charger's offered voltages / Wi-Fi and MQTT state                  |
 | `wifi SSID PASS`      | Saves the Wi-Fi credentials and restarts                               |
 | `mqtt URL USER PASS`  | Saves the broker and restarts                                          |
+| `ota URL`             | Updates the firmware over Wi-Fi, with automatic rollback               |
 
 The output always boots at 5V and off, and the board asks the charger for the highest voltage up to 20V as soon as it starts. Credentials, the strip length, the chip type and the tunables are stored in the ESP32's NVS partition, never in the code. SIG is 3.3V logic going to the strip's DIN; the wiring notes, MQTT topics and the Mosquitto-on-Railway broker setup are in [`firmware/README.md`](firmware/README.md).
 
@@ -113,6 +114,10 @@ source ~/.espressif/tools/activate_idf_v6.1.sh
 idf.py build
 idf.py -p /dev/cu.usbmodem2101 flash monitor
 ```
+
+## Web control panel
+
+[`web/`](web/) is a single-page control panel, hosted on Railway next to the MQTT broker and served by Caddy. It connects to the broker over MQTT-over-WebSockets straight from the browser (the broker password is asked once and kept in that browser), shows every board it finds, and gives you power, colour, brightness, the eight effects, overlays, auto-dim, the strip and tuning settings, live sensor tiles and a 10 Hz loudness/spectrum view streamed from the board. It can also analyse a music file or the phone's microphone with the Web Audio API and feed loudness, bass, mid, treble and beats to the board 20 times a second, so the sound styles follow whatever you are playing. Presets live in the browser. The same site serves `firmware/ledify.bin`, so the panel's "Update over the air" button points the board at its own build. Home Assistant still works through the same broker.
 
 ## Credits
 

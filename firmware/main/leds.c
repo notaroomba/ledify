@@ -185,11 +185,17 @@ static void temp_rgb(uint8_t *r, uint8_t *g, uint8_t *b)
     }
 }
 
-// Scale a level down until the frame fits the power budget. sum is r+g+b over every pixel at full brightness.
+// Scale a level down until the frame fits the power budget. sum is the frame's draw at full brightness in mW x 255
+// (per-channel mW weighted by each pixel's colour); the dark current does not scale with brightness.
 static uint8_t capped(uint32_t sum, uint8_t lvl)
 {
-    uint32_t need = sum / 255 * lvl * LED_MW_PER_CHANNEL / 255;   // mW at this level
-    return need > budget_mw ? lvl * budget_mw / need : lvl;
+    uint32_t dark = (uint32_t)count * LED_DARK_MW;
+    uint32_t lit = sum / 255 * lvl / 255;                          // mW at this level, pixels only
+    if (dark + lit <= budget_mw || lit == 0) {
+        return lvl;
+    }
+    uint32_t avail = budget_mw > dark ? budget_mw - dark : 0;
+    return (uint32_t)lvl * avail / lit;
 }
 
 void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3])
@@ -225,7 +231,7 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         default:
             p[0] = r; p[1] = g; p[2] = b;
         }
-        sum += p[0] + p[1] + p[2];
+        sum += p[0] * LED_RED_MW + p[1] * LED_GREEN_MW + p[2] * LED_BLUE_MW;
     }
     last_cap = capped(sum, lvl);
     for (int i = 0; i < count; i++) {
