@@ -21,6 +21,8 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_crt_bundle.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 #include "mqtt_client.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -363,9 +365,27 @@ void net_publish_live(const char *json)
 
 // Raw microphone audio while "listen" is active: 16 kHz, 16-bit, little endian, 1 KB per message. Enqueued
 // (not sent inline) so the mic task never waits on the network; the outbox just drops behind if Wi-Fi is slow.
+static StreamBufferHandle_t audio_sb;
+
+// A small task drains the stream buffer with blocking QoS 0 publishes, so the mic task never touches the socket.
+static void audio_task(void *arg)
+{
+    static uint8_t buf[1024];
+    for (;;) {
+        size_t n = xStreamBufferReceive(audio_sb, buf, sizeof buf, portMAX_DELAY);
+        if (n && mqtt_up) {
+            esp_mqtt_client_publish(mqtt, t_audio, (const char *)buf, n, 0, 0);
+        }
+    }
+}
+
 void net_publish_audio(const void *pcm, int len)
 {
+    if (!audio_sb) {
+        audio_sb = xStreamBufferCreate(8192, 1024);                 // a quarter second of audio
+        xTaskCreate(audio_task, "audio", 4096, NULL, 3, NULL);
+    }
     if (mqtt_up) {
-        esp_mqtt_client_enqueue(mqtt, t_audio, pcm, len, 0, 0, true);
+        xStreamBufferSend(audio_sb, pcm, len, 0);                   // drops the chunk if Wi-Fi is behind
     }
 }
