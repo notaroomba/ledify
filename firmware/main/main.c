@@ -57,8 +57,8 @@ static float temp_in;                       // fed in over MQTT; the barometer's
 static bool have_temp_in;
 static int64_t live_until;                  // "live N": stream loudness/bands to MQTT until then
 static uint32_t boots;                      // boot counter and a log of the last four boots (reset reason, PD result,
-static char boot_log[4][64];                // whether the boot stayed up), in NVS so a trip to a charger with no
-static bool pd_saved, up_saved, safe_boot;  // Wi-Fi can still be read afterwards
+static char boot_log[4][96];                // whether the boot stayed up), in NVS so a trip to a charger with no
+static bool up_saved, safe_boot;  // Wi-Fi can still be read afterwards
 
 static const char *reset_name(void)
 {
@@ -112,15 +112,26 @@ static void boot_bookkeeping(void)
     }
 }
 
-static void save_pd_result(void)
+static int pd_phase_seen;
+
+static void save_pd_step(int phase)
 {
     const pd_state_t *pd = pd_get();
     int w = strlen(boot_log[0]);
-    w += snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " pd");
-    for (int i = 0; i < pd->n_pdos && w < (int)sizeof boot_log[0] - 12; i++) {
-        w += snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " %d/%d", pd->pdo_mv[i] / 100, pd->pdo_ma[i] / 100);
+    if (phase == 1) {
+        w += snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " caps");
+        for (int i = 0; i < pd->n_pdos && w < (int)sizeof boot_log[0] - 14; i++) {
+            w += snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " %d/%d", pd->pdo_mv[i] / 100, pd->pdo_ma[i] / 100);
+        }
+    } else if (phase == 2) {
+        snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " req %d/%d", pd->req_mv / 100, pd->req_ma / 100);
+    } else if (phase == 3) {
+        snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " got %d/%d", pd->contract_mv / 100, pd->contract_ma / 100);
+    } else if (phase == 4) {
+        snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " rej");
+    } else if (phase == 5) {
+        snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " HARDRST");
     }
-    snprintf(boot_log[0] + w, sizeof boot_log[0] - w, " got %d/%d", pd->contract_mv / 100, pd->contract_ma / 100);
     write_log0();
 }
 static bool power;
@@ -801,9 +812,9 @@ void app_main(void)
             frames = 0;
             last_beat = now;
         }
-        if (!pd_saved && pd_get()->ready && now > 5000000) {    // keep this boot's negotiation for the next boot to report
-            save_pd_result();
-            pd_saved = true;
+        if (pd_get()->phase != pd_phase_seen) {                 // write each PD step at once: a supply that cuts VBUS
+            pd_phase_seen = pd_get()->phase;                     // mid-handshake leaves the evidence in NVS
+            save_pd_step(pd_phase_seen);
         }
         if (!up_saved && now > 15000000) {                     // stayed up: this supply works
             strncat(boot_log[0], " ok", sizeof boot_log[0] - strlen(boot_log[0]) - 1);

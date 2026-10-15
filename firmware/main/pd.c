@@ -170,6 +170,9 @@ static bool request_best(int min_mv)
     uint32_t rdo = ((uint32_t)pdo_pos[best] << 28) | (1u << 25) | (1u << 24) |
                    ((uint32_t)(req_ma / 10) << 10) | (uint32_t)(req_ma / 10);
     send(DATA_REQUEST, &rdo, 1);
+    st.req_mv = req_mv;
+    st.req_ma = req_ma;
+    st.phase = 2;
     ESP_LOGI(TAG, "requesting %d mV %d mA", req_mv, req_ma);
     return true;
 }
@@ -203,6 +206,7 @@ static void pd_poll(void)
         uint8_t inta = rd(0x3E);
         if (inta & 0x01) {                           // I_HARDRST: the source reset the link
             ESP_LOGW(TAG, "hard reset from source");
+            st.phase = 5;
             st.ready = false; st.n_pdos = 0; st.contract_mv = st.contract_ma = 0;
             wr(R_RESET, 0x02);
             msg_id = 0;
@@ -240,16 +244,19 @@ static void pd_poll(void)
             pdo_pos[st.n_pdos] = i + 1;              // the Request names the PDO by its 1-based position
             st.n_pdos++;
         }
+        st.phase = 1;
         request_best(want_min_mv);
     } else if (n == 0 && type == CTRL_PS_RDY) {
         st.contract_mv = req_mv;
         st.contract_ma = req_ma;
         st.ready = true;
+        st.phase = 3;
         ESP_LOGI(TAG, "contract: %d mV %d mA", st.contract_mv, st.contract_ma);
     } else if (n == 0 && type == CTRL_REJECT) {
         st.contract_mv = 5000;                       // the source keeps vSafe5V; its first PDO says how much current
         st.contract_ma = st.n_pdos && st.pdo_mv[0] == 5000 ? st.pdo_ma[0] : 500;
         st.ready = true;
+        st.phase = 4;
         ESP_LOGW(TAG, "request rejected, staying at 5 V %d mA", st.contract_ma);
     } else if (n == 0 && type == CTRL_GET_SNK_CAP) {
         uint32_t pdo = (1u << 26) | (100u << 10) | 300;   // sink 5 V 3 A, USB communications capable

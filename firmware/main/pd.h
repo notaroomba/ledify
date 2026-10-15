@@ -8,6 +8,8 @@ typedef struct {
     bool ready;          // a contract (or a reject) has been received
     int contract_mv, contract_ma;
     int n_pdos;
+    int phase;           // 0 nothing, 1 caps received, 2 request sent, 3 PS_RDY, 4 rejected, 5 hard reset from the source
+    int req_mv, req_ma;  // what the last Request asked for
     int pdo_mv[7], pdo_ma[7];
 } pd_state_t;
 

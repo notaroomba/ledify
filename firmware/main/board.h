@@ -37,4 +37,4 @@
 #define PD_WANT_MA   5000   // most current we ask for
 #define LED_POWER_SETTLE_MS 100     // buck soft start + pixel power-on reset before the first frame
 #define WIFI_FAILS_BEFORE_SWITCH 4  // failed joins in a row before trying the fallback network
-#define PD_START_DELAY_MS 2000  // debug: give the USB console time to open before PD talks
+#define PD_START_DELAY_MS 100   // the source starts sending capabilities right away; answer them promptly
