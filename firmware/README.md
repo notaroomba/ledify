@@ -45,6 +45,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
+| `wifi2 SSID PASSWORD` | Save a fallback network and restart (`wifi2 off` clears it). The board joins the primary first and switches after `WIFI_FAILS_BEFORE_SWITCH` failed attempts, alternating until one works |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
 | `help` | Command list |
 
@@ -62,7 +63,7 @@ A 5 V pixel pulls about 60 mA at full white, so 300 of them want 18 A and a lapt
 
 ## Wi-Fi, MQTT and Home Assistant
 
-Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
+Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `ssid2`, `pass2`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
 
 The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3ed08`.
 

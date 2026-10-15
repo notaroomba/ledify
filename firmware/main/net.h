@@ -7,6 +7,7 @@
 // mqtt_pass), never in the code. Commands arriving over MQTT are queued like BLE ones.
 void net_init(QueueHandle_t cmd_queue);
 bool net_save_wifi(const char *ssid, const char *pass);
+bool net_save_wifi2(const char *ssid, const char *pass);   // fallback network, "" to clear
 bool net_save_mqtt(const char *url, const char *user, const char *pass);
 void net_status(char *out, size_t n);        // short human-readable line
 bool net_mqtt_connected(void);

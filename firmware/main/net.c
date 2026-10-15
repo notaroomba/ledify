@@ -26,7 +26,8 @@
 
 static const char *TAG = "net";
 static QueueHandle_t cmd_q;
-static char ssid[33], pass[65], mqtt_url[128], mqtt_user[48], mqtt_pass[64];
+static char ssid[33], pass[65], ssid2[33], pass2[65], mqtt_url[128], mqtt_user[48], mqtt_pass[64];
+static int which, fails;                  // which network we are on (0 primary, 1 fallback) and failed joins in a row
 static char id[16];                       // ledify_xxxxxx
 static char ip[16];
 static bool wifi_up, mqtt_up;
@@ -63,6 +64,24 @@ static bool save(const char *key, const char *val)
 bool net_save_wifi(const char *s, const char *p)
 {
     return save("ssid", s) && save("pass", p);
+}
+
+bool net_save_wifi2(const char *s, const char *p)
+{
+    return save("ssid2", s) && save("pass2", p);
+}
+
+// Point the station at network i; the connect itself happens on the next STA_START / DISCONNECTED event.
+static void apply_wifi(int i)
+{
+    const char *s = i ? ssid2 : ssid, *p = i ? pass2 : pass;
+    wifi_config_t wc = {0};
+    strncpy((char *)wc.sta.ssid, s, sizeof wc.sta.ssid - 1);
+    strncpy((char *)wc.sta.password, p, sizeof wc.sta.password - 1);
+    wc.sta.threshold.authmode = p[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    wc.sta.pmf_cfg.capable = true;
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    ESP_LOGI(TAG, "wifi: joining \"%s\"%s", s, i ? " (fallback)" : "");
 }
 
 bool net_save_mqtt(const char *url, const char *user, const char *pw)
@@ -208,12 +227,19 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t event_id, void 
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_up = false;
-        ESP_LOGW(TAG, "wifi disconnected, retrying");
+        if (ssid2[0] && ++fails >= WIFI_FAILS_BEFORE_SWITCH) {   // the other network may be the one in range
+            fails = 0;
+            which ^= 1;
+            apply_wifi(which);
+        } else {
+            ESP_LOGW(TAG, "wifi disconnected, retrying");
+        }
         esp_wifi_connect();
     } else if (base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(ip, sizeof ip, IPSTR, IP2STR(&e->ip_info.ip));
         wifi_up = true;
+        fails = 0;
         ESP_LOGI(TAG, "wifi connected, ip %s", ip);
         mqtt_start();
     }
@@ -242,6 +268,9 @@ void net_init(QueueHandle_t q)
         return;
     }
     load("pass", pass, sizeof pass);
+    if (load("ssid2", ssid2, sizeof ssid2)) {
+        load("pass2", pass2, sizeof pass2);
+    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -251,15 +280,10 @@ void net_init(QueueHandle_t q)
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL, NULL);
 
-    wifi_config_t wc = {0};
-    strncpy((char *)wc.sta.ssid, ssid, sizeof wc.sta.ssid - 1);
-    strncpy((char *)wc.sta.password, pass, sizeof wc.sta.password - 1);
-    wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    wc.sta.pmf_cfg.capable = true;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    apply_wifi(0);
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "wifi: joining \"%s\" as %s, mqtt %s", ssid, id, mqtt_url[0] ? mqtt_url : "not configured");
+    ESP_LOGI(TAG, "id %s, fallback network %s, mqtt %s", id, ssid2[0] ? ssid2 : "none", mqtt_url[0] ? mqtt_url : "not configured");
 }
 
 bool net_mqtt_connected(void)
@@ -272,9 +296,9 @@ void net_status(char *out, size_t n)
     if (!ssid[0]) {
         snprintf(out, n, "wifi not configured");
     } else if (!wifi_up) {
-        snprintf(out, n, "wifi %s connecting", ssid);
+        snprintf(out, n, "wifi %s connecting", which ? ssid2 : ssid);
     } else {
-        snprintf(out, n, "wifi %s ip %s, mqtt %s", ssid, ip,
+        snprintf(out, n, "wifi %s ip %s, mqtt %s", which ? ssid2 : ssid, ip,
                  !mqtt_url[0] ? "not configured" : mqtt_up ? "connected" : "connecting");
     }
 }

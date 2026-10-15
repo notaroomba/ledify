@@ -4,7 +4,7 @@
 //   on | off | rgb R G B | level N | count N | type ws2812|ws2811|sk6812|sk6812w|ws2816
 //   mode solid|rainbow|sound|auto
 //   volt 5 | volt 12 | status | pd | net | help
-//   wifi SSID PASSWORD | mqtt URL [USER PASSWORD]      (saved to NVS, then the board restarts)
+//   wifi SSID PASSWORD | wifi2 SSID PASSWORD | mqtt URL [USER PASSWORD]   (saved to NVS, then the board restarts)
 // Home Assistant talks JSON to ledify/<id>/light/set; see net.c for the topics.
 #include <stdio.h>
 #include <string.h>
@@ -256,7 +256,7 @@ static void handle(char *line)
     for (char *p = tok[0]; *p; p++) {
         *p = tolower((unsigned char)*p);
     }
-    bool keep_case = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "mqtt");   // credentials are case sensitive
+    bool keep_case = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "wifi2") || !strcmp(tok[0], "mqtt");   // credentials are case sensitive
     for (int i = 1; i < n && !keep_case; i++) {
         for (char *p = tok[i]; *p; p++) {
             *p = tolower((unsigned char)*p);
@@ -343,13 +343,17 @@ static void handle(char *line)
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
+    } else if (!strcmp(tok[0], "wifi2") && (n == 2 || n == 3)) {   // "wifi2 off" clears the fallback
+        reply(net_save_wifi2(n == 3 ? tok[1] : "", n == 3 ? tok[2] : "") ? "ok, restarting" : "err nvs");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
     } else if (!strcmp(tok[0], "mqtt") && (n == 2 || n == 4)) {
         reply(net_save_mqtt(tok[1], n == 4 ? tok[2] : NULL, n == 4 ? tok[3] : NULL) ? "ok, restarting" : "err nvs");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<solid|rainbow|sound|auto> volt<5|12> status pd net "
-              "wifi<ssid pass> mqtt<url [user pass]>");
+              "wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }

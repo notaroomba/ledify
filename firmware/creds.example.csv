@@ -7,6 +7,8 @@ key,type,encoding,value
 cfg,namespace,,
 ssid,data,string,YourNetwork
 pass,data,string,YourPassword
+ssid2,data,string,FallbackNetwork
+pass2,data,string,FallbackPassword
 mqtt_url,data,string,mqtts://broker.example.com:8883
 mqtt_user,data,string,ledify
 mqtt_pass,data,string,YourBrokerPassword
