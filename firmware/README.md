@@ -79,7 +79,7 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 
 State is published after every command and every 30 s. On connect the board sends retained discovery messages under `homeassistant/`, so with Home Assistant's MQTT integration pointed at the same broker a light (with the four modes as effects), a pixel-count slider, a chip-type select and illuminance, temperature, pressure and sound sensors appear by themselves.
 
-### Broker
+### Broker and Home Assistant on Railway
 
 Any MQTT broker works. Mine is Mosquitto on Railway: the `eclipse-mosquitto:2` image, a TCP proxy on application port 1883 (Railway gives you a `host:port` to put in the `mqtt://` URL), `MQTT_USER` and `MQTT_PASS` variables, and this start command so the config and password file are generated at boot instead of living in a repo:
 
@@ -88,3 +88,5 @@ sh -c 'printf "listener 1883\nlistener 8080\nprotocol websockets\nallow_anonymou
 ```
 
 The second listener speaks MQTT over WebSockets on port 8080; put a Railway domain on that port and browsers can reach the broker over `wss://<domain>:443`.
+
+Home Assistant runs next to it as a second Railway service from the official `ghcr.io/home-assistant/home-assistant:stable` image with a volume mounted at `/config` and a domain on port 8123. Railway's start command replaces the image entrypoint, so it seeds `configuration.yaml` with `http.use_x_forwarded_for` and `trusted_proxies` for Railway's internal ranges on the first boot and then runs `python3 -m homeassistant --config /config`. Inside the project Home Assistant reaches the broker at `mosquitto.railway.internal:1883`, and the phone app just gets the Railway URL.
