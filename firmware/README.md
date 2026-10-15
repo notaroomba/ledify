@@ -57,6 +57,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
 | `limit 0\|1` | 1 dims to the power budget, 0 (default) sends what was asked and only reports the estimate. Saved |
 | `ota URL` | Download a new app image over Wi-Fi and restart into it (see below) |
+| `palette hex,hex,...` | Up to 8 colour stops (`ff8800,2244ff`) spread along the strip as a gradient; also selects the `palette` colour source (the panel sends the album cover's colours) |
 | `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |

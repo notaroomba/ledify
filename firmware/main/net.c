@@ -140,7 +140,7 @@ static void discover(void)
     snprintf(msg, sizeof msg,
              "{\"name\":\"Ledify\",\"uniq_id\":\"%s_light\",\"schema\":\"json\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
              "\"avty_t\":\"%s\",\"brightness\":true,\"supported_color_modes\":[\"rgb\"],\"effect\":true,"
-             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
+             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"palette\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
              id, t_set, t_lstate, t_avail, devs);
     esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
 

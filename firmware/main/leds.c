@@ -30,6 +30,8 @@ static uint32_t budget_mw = LED_BUDGET_NO_PD_MW;
 static uint32_t need_mw;                   // the last frame's estimated draw at the requested level
 static bool limit_on;                      // scale brightness to the budget (else just report)
 static uint8_t cur_r = 255, cur_g = 255, cur_b = 255;   // "on" with no colour set gives white
+static uint8_t pal[8][3] = {{255, 255, 255}};             // palette stops, spread evenly along the strip
+static int npal = 1;
 static uint8_t hue, temp_pos = 128, last_cap;
 static uint8_t fb[MAX_LEDS][3];                          // one frame at full brightness, before the power cap
 
@@ -221,6 +223,19 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         case COLOR_RAINBOW:
             hsv(hue + i * 256 / count, p, p + 1, p + 2);
             break;
+        case COLOR_PALETTE: {                                       // linear blend between the stops, 8.8 fixed point
+            uint32_t pos = npal > 1 ? (uint32_t)i * (npal - 1) * 256 / (count > 1 ? count - 1 : 1) : 0;
+            int k = pos >> 8;
+            if (k >= npal - 1) {
+                k = npal > 1 ? npal - 2 : 0;
+                pos = (uint32_t)(npal - 1) << 8;
+            }
+            uint32_t f = npal > 1 ? pos - ((uint32_t)k << 8) : 0;
+            for (int ch = 0; ch < 3; ch++) {
+                p[ch] = (pal[k][ch] * (256 - f) + pal[npal > 1 ? k + 1 : k][ch] * f) >> 8;
+            }
+            break;
+        }
         case COLOR_METER:                                           // green, yellow, red along the strip
             hsv(85 - i * 85 / count, p, p + 1, p + 2);
             break;
@@ -257,4 +272,14 @@ uint32_t leds_get_need_mw(void)
 uint32_t leds_get_budget_mw(void)
 {
     return budget_mw;
+}
+
+void leds_set_palette(const uint8_t (*stops)[3], int n)
+{
+    npal = n < 1 ? 1 : n > 8 ? 8 : n;
+    for (int i = 0; i < npal; i++) {
+        for (int ch = 0; ch < 3; ch++) {
+            pal[i][ch] = stops[i][ch];
+        }
+    }
 }

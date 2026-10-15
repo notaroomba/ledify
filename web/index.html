@@ -178,7 +178,8 @@
   <section class="card wide">
     <h2>Spotify <small id="spstate">not connected</small></h2>
     <div class="row"><img id="spart" style="width:64px;height:64px;border-radius:8px;background:#0f1218;object-fit:cover" alt=""><div style="flex:1;min-width:160px"><div id="sptrack" style="font-weight:600">—</div><div id="spartist" class="hint" style="margin:0"></div></div><button class="btn" id="splogin">Connect Spotify</button></div>
-    <div class="toggle"><div><div class="t">Colours from the album art</div><div class="d">every new track sets the strip colour from its cover</div></div><button class="switch" id="spauto"></button></div>
+    <div class="toggle"><div><div class="t">Gradient from the album art</div><div class="d">every new track spreads its cover's main colours along the strip</div></div><button class="switch" id="spauto"></button></div>
+    <div class="chips" id="sppal"></div>
     <div class="row" style="margin-top:4px"><label class="hint" style="margin:0;width:110px">Client ID</label><input type="text" id="spclient" placeholder="only needed if the site has none" style="flex:1;min-width:200px"></div>
   </section>
 
@@ -205,7 +206,7 @@
 <script>
 // Ledify control panel: MQTT over WebSockets straight to the broker, the same topics the board uses.
 const $ = id => document.getElementById(id);
-const EFFECTS = { solid: 'one colour', rainbow: 'moving rainbow', temp: 'colour from the temperature', spectrum: 'bass, mid and treble bars', meter: 'green to red along the strip', sound: 'brightness follows the sound', vu: 'lit length follows the sound', pulse: 'flashes on the beat' };
+const EFFECTS = { solid: 'one colour', rainbow: 'moving rainbow', temp: 'colour from the temperature', spectrum: 'bass, mid and treble bars', meter: 'green to red along the strip', palette: 'gradient of the album cover colours', sound: 'brightness follows the sound', vu: 'lit length follows the sound', pulse: 'flashes on the beat' };
 const OVERLAYS = ['none', 'vu', 'pulse'];
 const PALETTE = ['#ffffff', '#ffd6a0', '#ff8c00', '#ffd700', '#ff0040', '#ff00ff', '#8000ff', '#0080ff', '#00e5ff', '#00ff80'];
 // The password is filled in at deploy time from the broker service's variable; "__MQTT_PASS__" means a local copy.
@@ -489,8 +490,9 @@ async function spPoll() {
   } catch (e) { $('spstate').textContent = 'Spotify: ' + e.message; }
 }
 setInterval(spPoll, 5000);
-// Dominant saturated colour of the cover: skip near-black, near-white and grey pixels, bucket the rest, take the
-// biggest bucket weighted by saturation, then push it to full intensity (the strip's level handles brightness).
+// Up to five prominent colours of the cover: skip near-black, near-white and grey pixels, bucket the rest, rank the
+// buckets by size and saturation, keep ones that differ enough from those already picked, order them by hue,
+// push each to full intensity (the strip's level handles brightness) and send them as a gradient.
 function colourFromArt(url) {
   const img = new Image(); img.crossOrigin = 'anonymous';
   img.onload = () => {
@@ -503,12 +505,18 @@ function colourFromArt(url) {
       const k = (r >> 5) + ',' + (gg >> 5) + ',' + (b >> 5), bn = bins[k] || (bins[k] = { n: 0, r: 0, g: 0, b: 0, s: 0 });
       bn.n++; bn.r += r; bn.g += gg; bn.b += b; bn.s += sat;
     }
-    let best = null, score = -1;
-    for (const bn of Object.values(bins)) { const sc = bn.n * (bn.s / bn.n + 0.2); if (sc > score) { score = sc; best = bn; } }
-    if (!best) { $('spstate').textContent = 'cover has no strong colour'; return; }
-    const r = best.r / best.n, gg = best.g / best.n, b = best.b / best.n, mx = Math.max(r, gg, b);
-    const hex = '#' + [r, gg, b].map(v => ('0' + Math.round(v * 255 / mx).toString(16)).slice(-2)).join('');
-    $('color').value = hex; sendColor(hex);
+    const ranked = Object.values(bins).map(bn => ({ r: bn.r / bn.n, g: bn.g / bn.n, b: bn.b / bn.n, score: bn.n * (bn.s / bn.n + 0.2) })).sort((a, b) => b.score - a.score);
+    const picked = [];
+    for (const c of ranked) {
+      if (picked.length >= 5) break;
+      if (picked.every(p => Math.hypot(p.r - c.r, p.g - c.g, p.b - c.b) > 70)) picked.push(c);
+    }
+    if (!picked.length) { $('spstate').textContent = 'cover has no strong colour'; return; }
+    const hue = c => { const mx = Math.max(c.r, c.g, c.b), mn = Math.min(c.r, c.g, c.b), d = mx - mn || 1; return mx === c.r ? ((c.g - c.b) / d + 6) % 6 : mx === c.g ? (c.b - c.r) / d + 2 : (c.r - c.g) / d + 4; };
+    picked.sort((a, b) => hue(a) - hue(b));
+    const hexes = picked.map(c => { const mx = Math.max(c.r, c.g, c.b); return [c.r, c.g, c.b].map(v => ('0' + Math.round(v * 255 / mx).toString(16)).slice(-2)).join(''); });
+    $('sppal').innerHTML = hexes.map(h => '<span class="swatch" style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#' + h + '"></span>').join('');
+    send('palette ' + hexes.join(','));
   };
   img.onerror = () => { $('spstate').textContent = 'could not load the cover'; };
   img.src = url;

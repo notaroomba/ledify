@@ -45,9 +45,9 @@ static const char *TAG = "ledify";
 #define PULSE_FLOOR 64         // brightness between beats, out of 255
 
 typedef enum { OVER_NONE, OVER_VU, OVER_PULSE } overlay_t;
-static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter"};
+static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette"};
 static const char *overlay_names[] = {"none", "vu", "pulse"};
-#define MODES "solid|rainbow|temp|spectrum|meter|sound|vu|pulse|auto"
+#define MODES "solid|rainbow|temp|spectrum|meter|palette|sound|vu|pulse|auto"
 
 static leds_color_t color;
 static overlay_t overlay;
@@ -198,7 +198,7 @@ static const char *effect_name(void)
 // showing. auto is the old name for the lux modifier.
 static bool set_mode(const char *name)
 {
-    int c = lookup(name, color_names, 5);
+    int c = lookup(name, color_names, 6);
     if (c >= 0) {
         color = c;
         sound_on = false;
@@ -487,7 +487,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "mode") && n == 2) {
         reply(set_mode(tok[1]) ? mic_note() : "err mode " MODES);
     } else if (!strcmp(tok[0], "color") && n == 2) {
-        int c = lookup(tok[1], color_names, 5);
+        int c = lookup(tok[1], color_names, 6);
         if (c < 0) {
             reply("err color " LED_COLORS);
             return;
@@ -591,6 +591,28 @@ static void handle(char *line)
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
         reply("ok, see the live topic");
+    } else if (!strcmp(tok[0], "palette") && n == 2) {           // "palette ff8800,2244ff,..." up to 8 stops
+        uint8_t stops[8][3];
+        int ns = 0;
+        char *save2;
+        for (char *h = strtok_r(tok[1], ",", &save2); h && ns < 8; h = strtok_r(NULL, ",", &save2)) {
+            if (strlen(h) != 6) {
+                reply("err palette rrggbb,rrggbb,...");
+                return;
+            }
+            unsigned long v = strtoul(h, NULL, 16);
+            stops[ns][0] = v >> 16;
+            stops[ns][1] = v >> 8;
+            stops[ns][2] = v;
+            ns++;
+        }
+        if (!ns) {
+            reply("err palette rrggbb,...");
+            return;
+        }
+        leds_set_palette(stops, ns);
+        color = COLOR_PALETTE;
+        reply("ok");
     } else if (!strcmp(tok[0], "live") && n == 2) {
         int s = atoi(tok[1]);
         live_until = esp_timer_get_time() + (s < 0 ? 0 : s > 600 ? 600 : s) * 1000000LL;
@@ -611,7 +633,7 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "help")) {
         reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> "
-              "volt<5|12 yes> live<s> listen<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "volt<5|12 yes> palette<hex,hex,..> live<s> listen<s> audio<l b m t p> status pd net ota<url> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
