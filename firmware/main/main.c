@@ -774,7 +774,7 @@ void app_main(void)
     status(snap, sizeof snap);               // one snapshot in the log so sensors can be checked without BLE
     ESP_LOGI(TAG, "%s", snap);
 
-    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0, last_live = 0;
+    int64_t last_sense = 0, last_beat = 0, last_pub = 0, last_frame = 0, last_live = 0, pub_due = 0;
     bool image_ok = false;
     uint32_t frame_max_us = 0, frames = 0;
     cmd_t cmd;
@@ -784,8 +784,8 @@ void app_main(void)
             bool quiet = !strncmp(cmd.text, "audio ", 6);
             handle(cmd.text);
             frame();
-            if (!quiet) {
-                publish();
+            if (!quiet && !pub_due) {
+                pub_due = esp_timer_get_time() + 150000;   // a slider sends many commands: one state publish per 150 ms
             }
         }
         int64_t now = esp_timer_get_time();
@@ -841,6 +841,11 @@ void app_main(void)
                      have_mic ? mic_loud() : 0, b[0], b[1], b[2], have_mic ? mic_pulse() : 0, have_mic ? mic_db() : 0.0f, leds_get_cap());
             net_publish_live(live);
             last_live = now;
+        }
+        if (pub_due && now >= pub_due) {
+            publish();
+            pub_due = 0;
+            last_pub = now;
         }
         if (now - last_pub > PUBLISH_MS * 1000LL) {
             publish();
