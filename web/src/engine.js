@@ -13,7 +13,7 @@ export function inputs() {
   const lens = (() => { const st = opt.stripe(); return !st || st === '0' ? [] : st.split(',').map(v => Math.max(1, +v || 1)); })();
   return {
     rgb: hexRgb(opt.color() || '#ffffff'), stops: grad.stops(), cover: parseStops(s.cover || 'ffffff@0'),
-    stripes: lens, stripeCols: distinctColours(grad.stops()).map(hexRgb), count: s.count || 300, scroll: opt.scroll() || 0, hstep: s.hstep || 10,
+    stripes: lens, stripeCols: distinctColours(grad.stops()).map(hexRgb), count: s.count || 300, scroll: opt.scroll() || 0, hstep: s.hstep || 10, fxpal: !!s.fxpal,
     live: ui.live, temp: z.temp_c ?? s.temp_c ?? 20, tempLo: s.temp_lo ?? 15, tempHi: s.temp_hi ?? 30,
     spec: b => spec ? (spec[b] || 0) / 255 : (ui.live.bands[Math.min(2, Math.floor(b * 3 / 16))] || 0) / 255 * (0.6 + 0.4 * Math.sin(b * 1.7 + performance.now() / 300)),
   };

@@ -16,6 +16,12 @@ const motion = (x, t) => {
   return m ? { tilt: m[0] / 100, side: m[1] / 100, heading: m[2], energy: m[3] / 100, height: m[4] ?? 0 }
     : { tilt: 0.3 * Math.sin(t * 0.9), side: 0.25 * Math.sin(t * 0.6 + 1), heading: (t * 40) % 360, energy: Math.max(0, Math.sin(t * 1.3)) ** 4, height: 25 * Math.sin(t * 0.7) };
 };
+// Fused modes: colours from their own list, or along the user's gradient when "fxpal" is on (as on the board).
+const AURORA = [[0, 255, 70], [0, 220, 150], [0, 130, 255], [110, 40, 255], [210, 0, 170]];
+const lutAt = (l, f) => { const x = Math.max(0, Math.min(1, f)) * (l.length - 1), k = Math.min(l.length - 2, Math.floor(x)); return mix(l[k], l[k + 1], x - k); };
+const tone = (x, own, f) => x.fxpal ? rgbAt(x.stops, Math.max(0, Math.min(1, f)) * 100) : own ? lutAt(own, f) : hsv(((f % 1) + 1) % 1);
+const heat = (x, h) => x.fxpal ? scale(rgbAt(x.stops, h * 100), Math.min(1, h * 3))
+  : h < 1 / 3 ? [765 * h, 0, 0] : h < 2 / 3 ? [255, 765 * (h - 1 / 3), 0] : [255, 255, 765 * (h - 2 / 3)];
 const noise = (i, k) => { const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return v - Math.floor(v); };
 
 export const SOURCE = {
@@ -100,6 +106,42 @@ export const EFFECTS = [
       const pos = motion(x, t).height / Math.max(1, x.hstep), band = Math.floor(pos), frac = pos - band;
       const col = band === 0 ? x.rgb : hsv((((rgbHsv(x.rgb)[0] + band / 8) % 1) + 1) % 1), dot = Math.round(frac * (n - 1));
       px.forEach((p, i) => p.splice(0, 3, ...(i === dot ? mix(col, [255, 255, 255], 0.5) : col)));
+    } },
+  // Fused modes: the mic and the IMU together (firmware/main/fx.c).
+  { id: 'aurora', label: 'Aurora', desc: 'slow curtains of light; music swells them, they drift downhill', group: 'fused', fw: 'fxpal',
+    paint: (px, n, t, x) => {
+      const m = motion(x, t), loud = x.live.loud / 255, d = clamp1(m.tilt / 0.5);
+      px.forEach((p, i) => {
+        const u = i / n, f = (Math.sin(2 * Math.PI * (3 * u + t * (0.06 + 0.35 * d))) + Math.sin(2 * Math.PI * (5 * u - t * 0.1)) + 2) / 4;
+        const v = 0.08 + 0.92 * Math.max(0, (f - 0.27) / 0.73) ** 2 * (0.35 + 0.65 * (Math.sin(2 * Math.PI * (u + t * 0.03)) + 1) / 2);
+        p.splice(0, 3, ...scale(tone(x, AURORA, (Math.sin(2 * Math.PI * (2 * u - t * 0.05)) + 1) * 0.375), v * (0.5 + 0.5 * loud)));
+      });
+    } },
+  { id: 'fire', label: 'Fire', desc: 'flames rise from whichever end is down; sound feeds them', group: 'fused', fw: 'fxpal',
+    paint: (px, n, t, x) => {
+      const m = motion(x, t), fuel = Math.min(1, x.live.loud / 255 * 0.8 + m.energy * 0.6), k = Math.floor(t * 20);
+      const dir = m.tilt > 0.15 ? 1 : m.tilt < -0.15 ? -1 : 0, tall = 0.25 + 0.6 * fuel;
+      px.forEach((p, i) => {
+        const y = dir > 0 ? i / n : dir < 0 ? 1 - i / n : Math.min(i, n - 1 - i) / (n / 2);
+        p.splice(0, 3, ...heat(x, Math.max(0, Math.min(1, (1 - y / tall) * (0.7 + 0.5 * noise(i, k))))));
+      });
+    } },
+  { id: 'bounce', label: 'Bounce', desc: 'balls under real gravity; every beat kicks them up', group: 'fused', fw: 'fxpal',
+    paint: (px, n, t, x) => {
+      const m = motion(x, t), down = m.tilt < 0 ? 1 : 0, r = Math.max(1.5, n / 40);
+      const balls = [0, 1, 2].map(b => { const ph = (t * (1.1 + b * 0.27) + b * 0.3) % 1, h = 4 * ph * (1 - ph) * (0.4 + b * 0.2); return [down ? 1 - h : h, tone(x, null, x.fxpal ? b / 2 : m.heading / 360 + b / 3)]; });
+      px.forEach((p, i) => { let c = [0, 0, 0]; for (const [pos, col] of balls) { const f = Math.max(0, 1 - Math.abs(i - pos * (n - 1)) / r); c = c.map((v, k) => Math.max(v, col[k] * f * f)); } p.splice(0, 3, ...c); });
+    } },
+  { id: 'comet', label: 'Comet', desc: 'two comets cross in the middle on every beat, in tempo', group: 'fused', fw: 'fxpal',
+    paint: (px, n, t, x) => {
+      const m = motion(x, t), bpm = x.live.bpm && x.live.lock >= 30 ? x.live.bpm : 100, ph = t * bpm / 120, s = 0.5 - 0.5 * Math.cos(2 * Math.PI * ph);
+      const heads = [[s, tone(x, null, x.fxpal ? 0 : m.heading / 360)], [1 - s, tone(x, null, x.fxpal ? 1 : m.heading / 360 + 0.5)]];
+      const dir = Math.sin(2 * Math.PI * ph) >= 0 ? 1 : -1, len = n / 6;
+      px.forEach((p, i) => {
+        let c = [0, 0, 0];
+        heads.forEach(([pos, col], k) => { const d = (pos * (n - 1) - i) * (k ? -dir : dir), f = d >= -1 && d < len ? (d < 0 ? 1 + d : 1 - d / len) : 0; c = c.map((v, j) => Math.max(v, col[j] * f * f)); });
+        p.splice(0, 3, ...c);
+      });
     } },
 ];
 export const effectOf = id => EFFECTS.find(e => e.id === id);

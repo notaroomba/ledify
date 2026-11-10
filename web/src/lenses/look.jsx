@@ -93,6 +93,7 @@ export function EffectsLens() {
   const [luxHi, setLuxHi] = optimistic('lux_hi', () => state().lux_hi);
   const [night, setNight] = optimistic('night', () => state().night);
   const [fadeMs, setFadeMs] = optimistic('fade', () => state().fade);
+  const [fxpal, setFxpal] = optimistic('fxpal', () => state().fxpal);
   const avail = g => EFFECTS.filter(e => e.group === g && (!e.fw || state()[e.fw] !== undefined));
   const card = e => <button type="button" class="fx" aria-pressed={opt.mode() === e.id ? 'true' : 'false'} onClick={() => act.mode(e.id)}>
     <Preview id={e.id} /><b>{e.label}</b><span>{e.desc}</span>
@@ -103,6 +104,11 @@ export function EffectsLens() {
     <Show when={avail('motion').length}>
       <Group title="Motion" aside="from the board's accelerometer and gyroscope"><div class="fx-grid"><For each={avail('motion')}>{card}</For></div></Group>
       <MotionSettings />
+    </Show>
+    <Show when={avail('fused').length}>
+      <Group title="Sound + motion" aside="the mic and the motion sensors together"><div class="fx-grid"><For each={avail('fused')}>{card}</For></div>
+        <Toggle label="In my gradient" hint="Aurora, Fire, Bounce and Comet take the Gradient lens colours instead of their own" checked={() => !!fxpal()} onChange={on => { setFxpal(on ? 1 : 0); send('fxpal ' + (on ? 1 : 0)); }} />
+      </Group>
     </Show>
     <Group title="On top of any effect">
       <Chips items={[['none', 'nothing'], ['vu', 'VU length'], ['pulse', 'beat pulse']]} value={opt.overlay} onPick={act.overlay} />
