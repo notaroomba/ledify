@@ -64,6 +64,8 @@ This was also the first time I sat down with Claude to debug the boards. The boa
 
 # 10/13/2026 8 PM - Stencil, Paste and Hotplate
 
+_Time spent: 7h_
+
 The boards came in!! in the end I didnt go with PCBA and stenciled them myself. I got the stencil out and taped a board down in a jig made out of PCB rulers and kapton tape so it couldnt move
 
 ![image](assets/journal/stencil_jig.jpeg)
