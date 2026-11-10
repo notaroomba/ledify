@@ -12,6 +12,7 @@
 static float up[3] = {0, 0, 1};                 // the truth
 static float bias[3] = {0.8f, -0.5f, 0.3f};     // deg/s, a typical BMI323 offset
 static motion_snap_t m;
+static float acc_noise = 0.002f, gyr_noise = 0.06f;
 
 static float gauss(void)
 {
@@ -31,8 +32,8 @@ static void step(const float w[3], const float lin[3])
     float acc[3], gyr[3];
     for (int i = 0; i < 3; i++) {
         up[i] /= sqrtf(l);
-        acc[i] = up[i] + (lin ? lin[i] : 0) + 0.002f * gauss();   // BMI323: ~180 ug/sqrt(Hz) at 50 Hz bandwidth
-        gyr[i] = w[i] + bias[i] + 0.06f * gauss();                 // ~0.008 dps/sqrt(Hz)
+        acc[i] = up[i] + (lin ? lin[i] : 0) + acc_noise * gauss();   // BMI323: ~180 ug/sqrt(Hz) at 50 Hz bandwidth
+        gyr[i] = w[i] + bias[i] + gyr_noise * gauss();                 // ~0.008 dps/sqrt(Hz)
     }
     fusion_update(acc, gyr, DT);
     fusion_get(&m);
@@ -175,7 +176,7 @@ int main(void)
         if (k > 2 * FUSION_HZ) worst_creep = fmaxf(worst_creep, fabsf(m.height - h0));
     }
     float before = m.height;
-    for (k = 0; k < 3 * FUSION_HZ; k++) {
+    for (k = 0; k < 8 * FUSION_HZ; k++) {
         float u = k * DT, a = 0, d = 0;
         if (u < T) { a = 0.3f / 2 * (PI / T) * (PI / T) * cosf(PI * u / T); d = 0.3f * (1 - cosf(PI * u / T)) / 2; } else d = 0.3f;
         float lin[3] = {0, 0, a / 9.80665f + 0.02f};
@@ -186,6 +187,34 @@ int main(void)
     printf("pressure creeping 4.5 Pa over 3 min at rest: height moved at most %.1f cm (unfixed: ~38 cm); a 30 cm lift then reads %.1f cm\n",
            worst_creep * 100, (m.height - before) * 100);
     assert(worst_creep < 0.03f && fabsf(m.height - before - 0.3f) < 0.04f);
+
+    // The same 3 minutes with a much noisier IMU than the datasheet (8x the gyro noise, 2x the accelerometer's) and a
+    // tap on the desk every 30 s: the rest detector and the height hold mustn't flicker into letting the creep through.
+    gyr_noise = 0.5f; acc_noise = 0.004f;
+    pa -= 0.3f * 11.95f;                             // it stays up there
+    for (k = 0; k < 6 * FUSION_HZ; k++) {
+        step(z, off);
+        pa += 1.5f / 60 * DT;
+        if (k % 10 == 0) fusion_baro(pa + 0.5f * gauss(), 0.05f);
+    }
+    h0 = m.height;
+    int flips = 0, unheld = 0;
+    bool was = m.still;
+    worst_creep = 0;
+    for (k = 0; k < 180 * FUSION_HZ; k++) {
+        float tap[3] = {0, 0, 0.02f + (k % (30 * FUSION_HZ) == 0 ? 0.05f : 0)};
+        step(z, tap);
+        pa += 1.5f / 60 * DT;
+        if (k % 10 == 0) fusion_baro(pa + 0.5f * gauss(), 0.05f);
+        flips += was && !m.still;
+        was = m.still;
+        unheld += !m.hold;
+        worst_creep = fmaxf(worst_creep, fabsf(m.height - h0));
+    }
+    printf("noisy IMU, 3 min still with taps: rest flag dropped %d times, height not held %.1f s, height moved at most %.1f cm\n",
+           flips, unheld * DT, worst_creep * 100);
+    assert(flips <= 6 && worst_creep < 0.03f);
+    gyr_noise = 0.06f; acc_noise = 0.002f;
 
     puts("fusion ok");
     return 0;

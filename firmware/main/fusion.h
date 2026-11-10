@@ -17,6 +17,7 @@
 typedef struct motion_snap {
     uint8_t state;        // 0 calibrating, 1 calibrated, 2 running without a calibration (the board never held still)
     bool still;           // resting right now
+    bool hold;            // nobody has moved it for a second: height is held, its zero follows the air pressure
     float up[3];          // unit vector pointing up, in board coordinates
     float tilt;           // -1..1: sine of how far the strip's + end is raised, relative to the zero pose
     float side;           // -1..1: the same across the strip

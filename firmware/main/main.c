@@ -463,10 +463,10 @@ static void motion_json(char *out, size_t n)
     motion_snap_t m;
     motion_snapshot(&m);
     snprintf(out, n, "{\"motion\":\"%s\",\"still\":%d,\"tilt\":%.3f,\"side\":%.3f,\"heading\":%.1f,\"yaw_rate\":%.1f,"
-             "\"energy\":%.3f,\"kicks\":%lu,\"up\":[%.3f,%.3f,%.3f],\"bias\":[%.2f,%.2f,%.2f],\"axis\":%d,\"height_cm\":%.1f,\"vz\":%.2f,\"baro\":%d,"
+             "\"energy\":%.3f,\"kicks\":%lu,\"up\":[%.3f,%.3f,%.3f],\"bias\":[%.2f,%.2f,%.2f],\"axis\":%d,\"height_cm\":%.1f,\"vz\":%.2f,\"baro\":%d,\"hold\":%d,"
              "\"baro_pa\":%.2f,\"baro_cm\":%.1f,\"acc_off\":%.3f}",
              motion_state_name(m.state), m.still, m.tilt, m.side, m.heading, m.yaw_rate, m.energy, (unsigned long)m.kicks,
-             m.up[0], m.up[1], m.up[2], m.bias[0], m.bias[1], m.bias[2], axis, m.height * 100, m.vz, m.have_height,
+             m.up[0], m.up[1], m.up[2], m.bias[0], m.bias[1], m.bias[2], axis, m.height * 100, m.vz, m.have_height, m.hold,
              m.baro_pa, m.baro_h * 100, m.acc_off);
 }
 
@@ -1438,9 +1438,9 @@ void app_main(void)
         if (now < motion_until && now >= motion_next) {        // "motion N": the fused numbers 4 times a second
             motion_snap_t m;
             motion_snapshot(&m);
-            ESP_LOGI(TAG, "motion %s%s tilt %+.2f side %+.2f heading %5.1f turn %+6.1f deg/s energy %.2f kicks %lu height %+.1f cm (baro alone %+.1f cm, %.2f Pa) vz %+.3f acc_off %+.3f",
+            ESP_LOGI(TAG, "motion %s%s tilt %+.2f side %+.2f heading %5.1f turn %+6.1f deg/s energy %.2f kicks %lu height %+.1f cm%s (baro alone %+.1f cm, %.2f Pa) vz %+.3f acc_off %+.3f",
                      motion_state_name(m.state), m.still ? " still" : "", m.tilt, m.side, m.heading, m.yaw_rate, m.energy,
-                     (unsigned long)m.kicks, m.height * 100, m.baro_h * 100, m.baro_pa, m.vz, m.acc_off);
+                     (unsigned long)m.kicks, m.height * 100, m.hold ? " held" : "", m.baro_h * 100, m.baro_pa, m.vz, m.acc_off);
             motion_next = now + 250000;
         }
         if (now < live_until && now - last_live > LIVE_MS * 1000LL) {

@@ -9,8 +9,10 @@
 #define TRUST_G 0.2f            // the pull fades to nothing as |a| strays this far from 1 g
 #define STILL_GYR 3.0f          // deg/s from the bias: anything faster is not resting
 #define STILL_ACC 0.05f         // g from 1 g
-#define STILL_RANGE 2.5f        // a still second may wander this much per gyro axis (noise, a desk's tremble)
-#define STILL_ACC_RANGE 0.03f   // and the accelerometer's magnitude this much
+#define STILL_SD 0.8f           // a still second's gyro may scatter this much per axis (standard deviation, deg/s)
+#define STILL_ACC_SD 0.008f     // and the accelerometer's magnitude this much (g)
+#define HOLD_G 0.012f           // height hold: gravity-free acceleration under this (smoothed over 50 ms)
+#define HOLD_DPS 3.0f           // and turning slower than this, for a whole second, means the board isn't being moved
 #define KICK_G 1.2f             // a jolt (a knock, a sharp flick): gravity-free acceleration over this
 #define KICK_REARM_G 0.4f       // and back under this before the next one counts
 
@@ -21,7 +23,11 @@ static float u0[3] = {0, 0, 1};             // up in the zero pose
 static float across[3];                     // perpendicular to the strip and to u0
 static int cal_n, cal_total;                // samples in this calibration try, and since calibration started
 static int run_n;                           // rest detector: samples in the current quiet run
-static float run_sum[3], run_min[3], run_max[3], run_amin, run_amax, run_asum, rest_g;   // rest_g: |a| over the last still second
+static float run_sum[3], run_sq[3], run_asum, run_asq, rest_g;   // rest_g: |a| over the last still second
+static float sm_dev[3], sm_an = 1;          // rest detector input, smoothed over 50 ms so one noisy sample can't trip it
+static float hold_l, hold_w;                // height hold inputs, smoothed the same way
+static float acc_lp[3] = {0, 0, 1};         // the accelerometer over the last ~0.5 s: a hold judges the change from it
+static int quiet_n;                         // samples in a row the board hasn't been moved
 static float cal_acc[3];
 static bool kick_armed = true;
 // Height filter: ALT_W is the crossover in rad/s; below it the barometer wins, above it the accelerometer.
@@ -71,12 +77,10 @@ static void run_restart(void)
     run_n = 0;
     for (int i = 0; i < 3; i++) {
         run_sum[i] = 0;
-        run_min[i] = 1e9f;
-        run_max[i] = -1e9f;
+        run_sq[i] = 0;
     }
-    run_amin = 1e9f;
-    run_amax = -1e9f;
     run_asum = 0;
+    run_asq = 0;
 }
 
 void fusion_reset(void)
@@ -110,10 +114,15 @@ void fusion_set_axis(int a)
 // Feed the rest detector one sample; returns true each time a whole still second has gone by, with its mean gyro.
 static bool rest(const float acc[3], const float gyr[3], float mean[3])
 {
-    float an = len(acc), dev[3] = {gyr[0] - s.bias[0], gyr[1] - s.bias[1], gyr[2] - s.bias[2]};
-    bool quiet = len(dev) < STILL_GYR && fabsf(an - 1) < STILL_ACC;
+    float an = len(acc);
+    const float a = 0.1f;                        // 50 ms at 200 Hz
+    for (int i = 0; i < 3; i++) {
+        sm_dev[i] += (gyr[i] - s.bias[i] - sm_dev[i]) * a;
+    }
+    sm_an += (an - sm_an) * a;
+    bool quiet = len(sm_dev) < STILL_GYR && fabsf(sm_an - 1) < STILL_ACC;
     if (s.state == 0) {
-        quiet = fabsf(an - 1) < 0.15f;          // no bias known yet: judge by the spread alone
+        quiet = fabsf(sm_an - 1) < 0.15f;       // no bias known yet: judge by the spread alone
     }
     if (!quiet) {
         run_restart();
@@ -123,20 +132,18 @@ static bool rest(const float acc[3], const float gyr[3], float mean[3])
     run_n++;
     for (int i = 0; i < 3; i++) {
         run_sum[i] += gyr[i];
-        run_min[i] = fminf(run_min[i], gyr[i]);
-        run_max[i] = fmaxf(run_max[i], gyr[i]);
+        run_sq[i] += gyr[i] * gyr[i];
     }
     run_asum += an;
-    run_amin = fminf(run_amin, an);
-    run_amax = fmaxf(run_amax, an);
+    run_asq += an * an;
     if (run_n < FUSION_HZ) {
         return false;
     }
-    bool ok = run_amax - run_amin < STILL_ACC_RANGE;
     rest_g = run_asum / run_n;
+    bool ok = run_asq / run_n - rest_g * rest_g < STILL_ACC_SD * STILL_ACC_SD;
     for (int i = 0; i < 3; i++) {
-        ok = ok && run_max[i] - run_min[i] < STILL_RANGE;
         mean[i] = run_sum[i] / run_n;
+        ok = ok && run_sq[i] / run_n - mean[i] * mean[i] < STILL_SD * STILL_SD;
     }
     run_restart();
     s.still = ok;
@@ -228,12 +235,22 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
     float tau = e > s.energy ? 0.02f : 0.3f;
     s.energy += (e - s.energy) * (dt / (tau + dt));
 
+    float jig[3];                                // height hold: has anyone moved the board in the last second? Judged by the
+    for (int i = 0; i < 3; i++) {                // change in acceleration, so the sensor's own offset doesn't count
+        acc_lp[i] += (acc[i] - acc_lp[i]) * (dt / (0.5f + dt));
+        jig[i] = acc[i] - acc_lp[i];
+    }
+    hold_l += (len(jig) - hold_l) * 0.1f;
+    hold_w += (wd - hold_w) * 0.1f;
+    quiet_n = hold_l < HOLD_G && hold_w < HOLD_DPS ? quiet_n + 1 : 0;
+    s.hold = s.state == 1 && quiet_n > FUSION_HZ;
+
     if (h_have) {                                // height: predict from the vertical acceleration
         float az = (dot(acc, s.up) - 1) * 9.80665f - acc_off;
         s.vz += az * dt;
         s.height += s.vz * dt;
-        if (s.still) {
-            s.vz *= 0.98f;                       // resting: it isn't climbing, whatever the integral says
+        if (s.hold) {
+            s.vz = 0;                            // resting: it isn't climbing, whatever the integral says
         }
     }
 }
@@ -260,8 +277,9 @@ void fusion_baro(float pa, float dt)
     }
     dt = dt > 0.5f ? 0.5f : dt;
     float err = (alt - h_ref) - s.height;
-    if (s.still && s.state == 1) {
-        // Resting (the IMU has seen no movement for a second): the board isn't changing height, so whatever the
+    if (s.hold && quiet_n > 4 * FUSION_HZ) {
+        // Resting (the IMU has seen no movement for 4 s: the first 3 s of a rest still let the barometer finish
+        // settling the height after a move): the board isn't changing height, so whatever the
         // barometer says now is the air (a door, the heating, the weather, the sensor warming), not a climb. Let height
         // 0 follow the pressure (over ~2 s, which also averages the noise) and keep the height as it is. On the board
         // the pressure crept ~1.5 Pa a minute (13 cm/min) after a restart; this keeps that from adding up.
