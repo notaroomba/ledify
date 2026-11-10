@@ -224,16 +224,17 @@ every browser its own broker account through Mosquitto's dynamic security plugin
 browser. Anyone can open the panel, but a browser only sees the boards it has been linked to:
 
 - Hold a board's button for 3 s (three blue flashes). For 2 minutes its *setup window* is open: it sends a one-time
-  code to `ledify/<id>/pair`, which only the panel server can read, and to its own page and Bluetooth. Its own page
-  (`http://NAME.local`) then shows **Link this browser**, which opens the hosted panel and links it. The first link of
-  a board still on the old shared login also gives it its own broker account (the server sends it `mqtt ...`).
+  code to `ledify/<id>/pair`, which only the panel server can read, and gives it out over Bluetooth (`pair`) and the
+  USB console, never over Wi-Fi. In the hosted panel, **Link over Bluetooth** (Chrome or Edge on a computer or Android;
+  iPhone browsers have no Web Bluetooth) reads the code and links that browser. The owner's Bluetooth setup instead
+  gets the board its own broker account from the server and sends it (`mqtt ...`); the first link of a board still on
+  the old shared login does the same over MQTT.
 - The owner logs in with `OWNER_PASS` ("remember me", 90 days), sees every board, and in **Access and sharing**
   makes single-use share links (24 h), removes browsers (their broker account is deleted, which drops them at once)
   or forgets a board.
 - A browser remembers its boards with an HttpOnly cookie for a year.
 - `wifi`, `wifi2`, `mqtt`, `otabase`, and `ota` while no `otabase` is saved, are refused unless they come from the USB
-  console or arrive while the setup window is open. `pair` returns the code over USB, Bluetooth or the board's own
-  page, never over MQTT.
+  console or arrive while the setup window is open. `pair` returns the code over USB or Bluetooth only.
 
 Setting it up on Railway (accounts stay off, and everything works as before, until `OWNER_PASS` is set):
 
@@ -250,7 +251,7 @@ Setting it up on Railway (accounts stay off, and everything works as before, unt
    `BOARD_MQTT_URL=wss://<broker domain>:443/`. While boards move over, `LEGACY_MQTT_USER`/`LEGACY_MQTT_PASS` keep
    the old shared login working (it can no longer read setup codes); `HA_MQTT_USER`/`HA_MQTT_PASS` give Home Assistant
    its own account. Remove `MQTT_USER`, `MQTT_PASS` and `PANEL_PASS`.
-3. Link each board once (button, then its own page), point Home Assistant at its own account, then delete the
+3. Link each board once (button, then **Link over Bluetooth** or the owner's Bluetooth setup), point Home Assistant at its own account, then delete the
    `LEGACY_*` variables and the broker's TCP proxy.
 
 **Install and demo.** The hosted panel is a PWA: "Add to Home Screen" on a phone gives it an icon and a standalone

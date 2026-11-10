@@ -1,10 +1,10 @@
-// Who may use which board (the hosted panel with accounts on), and the board's own page offering to link this
-// browser while its setup window is open. The server keeps the lists; see web/server/index.mjs.
+// Who may use which board (the hosted panel with accounts on). A browser is linked to a board over Bluetooth while
+// the board's setup window is open, or with a share link. The server keeps the lists; see web/server/index.mjs.
 import { For, Show, createSignal, createEffect } from 'solid-js';
-import { ui, api, authConnect, toast, boardLabel, AUTH, LOCAL } from './store';
+import { ui, api, authConnect, toast, boardLabel, AUTH } from './store';
+import { setSetupOpen } from './dialogs';
 import { Group, confirmDialog } from './ui';
 
-export const HOSTED = import.meta.env.VITE_HOSTED_URL || 'https://ledify.notaroomba.dev';
 const ago = t => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60000); return m < 2 ? 'just now' : m < 120 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; };
 
 export function OwnerLogin() {
@@ -30,25 +30,13 @@ export function LinkGate() {
         <h2>Link a board to this browser</h2>
         <ol class="gate-steps">
           <li>Hold the board's button for 3 seconds, until the strip flashes blue three times. The board then accepts a link for 2 minutes.</li>
-          <li>On the same Wi-Fi, open <b>http://ledify.local</b> (or the board's name followed by .local) and tap <b>Link this browser</b>. It brings you back here, linked.</li>
+          <li>Tap <b>Link over Bluetooth</b> and pick the board. This needs Chrome or Edge on a computer or Android phone; iPhone browsers have no Bluetooth for web pages.</li>
           <li>Or open a share link the board's owner sent you.</li>
         </ol>
+        <button type="button" class="btn btn-primary" onClick={() => setSetupOpen(true)}>Link over Bluetooth</button>
         <p class="hint">This browser remembers its boards with a cookie, so you only do this once.</p>
         <details class="mt-4"><summary>Owner login</summary><div class="mt-2"><OwnerLogin /></div></details>
       </div>
-    </div>
-  </Show>;
-}
-
-// The board's own page while its setup window is open: hand the code to the hosted panel.
-export function PairBanner() {
-  const url = () => ui.pair && HOSTED + '/#link=' + ui.pair.id + '.' + ui.pair.code;
-  const copy = () => navigator.clipboard?.writeText(url()).then(() => toast('Link copied: open it on the phone or computer to link', 'info', 5000));
-  return <Show when={LOCAL && ui.pair}>
-    <div class="pair-banner">
-      <span class="grow">Setup is open for 2 minutes. Link a browser to this board on the hosted panel:</span>
-      <a class="btn btn-primary btn-sm" href={url()} target="_blank" rel="noopener">Link this browser</a>
-      <button type="button" class="btn btn-sm" onClick={copy}>Copy link</button>
     </div>
   </Show>;
 }

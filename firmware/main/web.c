@@ -189,13 +189,6 @@ void web_publish_live(const char *json)
     send_text("live", json);
 }
 
-void web_send_pair(const char *board_id, const char *code)
-{
-    char p[48];
-    snprintf(p, sizeof p, "%s %s", board_id, code);
-    send_text("pair", p);
-}
-
 void web_publish_reply(const char *text)
 {
     send_text("reply", text);

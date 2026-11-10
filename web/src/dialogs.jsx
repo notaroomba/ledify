@@ -75,7 +75,7 @@ export function Setup() {
     } catch (e) { setOut(o => o + 'Bluetooth: ' + e.message + '\n'); }
   };
   return <dialog ref={d} class="dialog" onClose={() => setSetupOpen(false)}>
-    <h3>Set up a board over Bluetooth</h3>
+    <h3>{AUTH && !ui.me?.owner ? 'Link a board over Bluetooth' : 'Set up a board over Bluetooth'}</h3>
     <p class="hint">Power the board, then send it the Wi-Fi it should join and the broker it should talk to. Only what you fill in is sent.</p>
     <div class="mt-3 grid gap-2">
       <div class="grid grid-cols-2 gap-2"><input ref={el => f.ssid = el} class="field" placeholder="Wi-Fi name" aria-label="Wi-Fi name" /><input ref={el => f.pass = el} type="password" class="field" placeholder="Wi-Fi password" aria-label="Wi-Fi password" /></div>

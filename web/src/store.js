@@ -21,7 +21,6 @@ export const [ui, setUi] = createStore({
   live: { loud: 0, bands: [0, 0, 0], pulse: 0, db: null, spec: null },
   toasts: [], brokerOpen: false, brokerMsg: '',
   me: null,                 // AUTH: { owner, boards, label } from the server
-  pair: null,               // the board's own page: { id, code } while its setup window is open
 });
 export const dev = () => ui.devices[ui.current] || {};
 export const state = () => dev().state || {};
@@ -108,7 +107,6 @@ export function ingest(topic, payload) {
   const mine = id === ui.current;
   const text = payload.toString();
   if (what === 'reply') { if (mine) onReply(text, id); return; }
-  if (what === 'pair') { const [pid, code] = text.split(' '); setUi('pair', code && code !== 'none' ? { id: pid, code } : null); return; }
   if (what === 'live') {
     if (mine) { try { const j = JSON.parse(text); if (j.loud !== undefined) setUi('live', j); } catch (e) { /* diagnostics payloads */ } }
     return;
@@ -143,7 +141,7 @@ function connectLocal() {
   setUi('conn', 'connecting');
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { setUi('devices', id, { online: true, seen: Date.now() }); setUi({ current: id, conn: 'online' }); send('status'); keepLive(); ws.send('pair'); };
+  ws.onopen = () => { setUi('devices', id, { online: true, seen: Date.now() }); setUi({ current: id, conn: 'online' }); send('status'); keepLive(); };
   ws.onmessage = e => {
     if (typeof e.data !== 'string') return;
     const sp = e.data.indexOf(' ');
