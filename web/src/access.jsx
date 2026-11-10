@@ -96,8 +96,12 @@ export function Access() {
         <details class="mt-3"><summary>Owner login</summary><div class="mt-2"><OwnerLogin /></div></details>
       </Show>
     </Group>
+    <Group title="Link a board">
+      <p class="hint">Hold its button for 3 seconds (three blue flashes), then link it over Bluetooth (Chrome or Edge), or open its own page on the same Wi-Fi and tap Link this browser.</p>
+      <div class="row mt-2"><button type="button" class="btn btn-sm btn-primary" onClick={() => setSetupOpen(true)}>Link over Bluetooth</button></div>
+    </Group>
     <Show when={ui.me?.owner}>
-      <For each={list() || []} fallback={<p class="hint">No boards linked yet. Hold a board's button for 3 seconds and link it from its own page.</p>}>{b => <Group title={b.name && b.name !== 'ledify' ? b.name : b.id} aside={b.id}>
+      <For each={list() || []} fallback={<p class="hint">No boards linked yet.</p>}>{b => <Group title={b.name && b.name !== 'ledify' ? b.name : b.id} aside={b.id}>
         <For each={b.devices} fallback={<p class="hint">Only you.</p>}>{v => <div class="row">
           <span class="grow truncate">{v.label || 'unnamed browser'}{v.you ? ' (this one)' : ''}</span><span class="hint">{ago(v.seen)}</span>
           <button type="button" class="btn btn-sm" onClick={() => revoke(b.id, v.device, v.label)}>Remove</button>
