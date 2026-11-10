@@ -1,7 +1,8 @@
 // The command bar (⌘K, / or the search button): type to jump to a lens, switch an effect, apply a look or gradient,
 // set a timer, or send the board any command it understands.
 import { For, Show, createSignal, createMemo, createEffect } from 'solid-js';
-import { send, logText, setUi, LOCAL, DEMO, opt } from './store';
+import { send, logText, setUi, LOCAL, DEMO, AUTH, opt } from './store';
+import { setAccessOpen } from './access';
 import { act } from './actions';
 import { EFFECTS } from './effects';
 import { grad } from './grad';
@@ -25,7 +26,8 @@ export function CommandBar(p) {
     { label: 'Cancel sleep timer', kind: 'timer', run: () => act.sleep(0), keys: 'sleep stop' },
     { label: 'Sunrise over 20 min', kind: 'timer', run: () => send('rise 20'), keys: 'wake alarm' },
     { label: 'Set up a board over Bluetooth', kind: 'setup', run: () => setSetupOpen(true), keys: 'wifi ble' },
-    ...(!LOCAL && !DEMO ? [{ label: 'Broker settings', kind: 'setup', run: () => setUi('brokerOpen', true), keys: 'mqtt' }] : []),
+    ...(AUTH ? [{ label: 'Access and sharing', kind: 'setup', run: () => setAccessOpen(true), keys: 'share login logout owner people remove' }] : []),
+    ...(!LOCAL && !DEMO && !AUTH ? [{ label: 'Broker settings', kind: 'setup', run: () => setUi('brokerOpen', true), keys: 'mqtt' }] : []),
     ...(!LOCAL ? [{ label: 'Open the effect simulator', kind: 'tool', run: () => window.open('/sim.html', '_blank'), keys: 'sim preview test audio' }] : []),
   ];
   // Every word typed must appear somewhere in the label, kind or keywords; earlier matches rank higher.

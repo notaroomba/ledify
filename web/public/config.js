@@ -1,4 +1,4 @@
-// Filled in when the container starts (see start.sh); a "__X__" value means a local copy without it.
+// For "npm run dev" only: the hosted server (server/index.mjs) writes its own config.js; a "__X__" value means unset.
 window.LEDIFY_CONFIG = {
   mqttUrl: 'wss://mosquitto-production-595e.up.railway.app',
   mqttUser: '__MQTT_USER__',

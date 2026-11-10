@@ -1,11 +1,12 @@
 // Looks (saved presets and Spotify's album colours) and Board (sensors, supply, the strip's hardware, firmware).
 import { For, Show, createEffect, createSignal } from 'solid-js';
-import { ui, dev, state, send, logText, optimistic, opt, LOCAL, DEMO, setUi, slugName, DEFAULT_NAME } from '../store';
+import { ui, dev, state, send, logText, optimistic, opt, LOCAL, DEMO, AUTH, setUi, slugName, DEFAULT_NAME } from '../store';
 import { Slider, Chips, Switch, Toggle, Group, confirmDialog } from '../ui';
 import { presets } from '../presets';
 import { sp } from '../spotify';
 import { parseStops, stopsCss } from '../gradient';
 import { setSetupOpen } from '../dialogs';
+import { setAccessOpen } from '../access';
 
 export const supply = () => { const s = state(); return s.pd && s.pd.ready ? (s.pd.mv / 1000) + ' V ' + (s.pd.ma / 1000) + ' A, ' + (s.pd.mv * s.pd.ma / 1e6).toFixed(0) + ' W' : 'no USB-PD contract, assuming 7.5 W'; };
 
@@ -111,8 +112,10 @@ export function BoardLens() {
       <Show when={state().name && state().ip}><p class="hint">On the local network at <a class="text-accent underline" href={'http://' + state().name + '.local/'}>{state().name}.local</a>, no cloud needed{state().clients ? ' · ' + state().clients + ' local panel' + (state().clients > 1 ? 's' : '') + ' open' : ''}</p></Show>
       <div class="row mt-2">
         <button type="button" class="btn btn-sm" onClick={() => setSetupOpen(true)}>Set up a board over Bluetooth</button>
-        <Show when={!LOCAL && !DEMO}><button type="button" class="btn btn-sm" onClick={() => setUi('brokerOpen', true)}>Broker</button></Show>
+        <Show when={!LOCAL && !DEMO && !AUTH}><button type="button" class="btn btn-sm" onClick={() => setUi('brokerOpen', true)}>Broker</button></Show>
+        <Show when={AUTH}><button type="button" class="btn btn-sm" onClick={() => setAccessOpen(true)}>Access and sharing</button></Show>
       </div>
+      <p class="hint mt-2">{state().setup ? 'Setup is open for ' + state().setup + ' s more.' : 'Wi-Fi, broker and update-source changes need the board\'s button held for 3 s first.'}</p>
     </Group>
     <Group title="Firmware" aside={state().fw ? 'running ' + state().fw : ''}>
       <div class="row"><input ref={otaUrl} type="url" class="field grow" aria-label="Firmware URL" value={location.origin + '/firmware/ledify.bin'} /><button type="button" class="btn btn-sm" onClick={ota}>Update</button></div>

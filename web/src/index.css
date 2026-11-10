@@ -255,6 +255,13 @@
   /* ---------- dialogs, command bar, toasts ---------- */
   .dialog { @apply w-[min(92vw,440px)] rounded-3xl border border-line bg-surface p-5 text-fg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-sm; }
   .dialog h3 { @apply mb-2 font-display text-lg font-semibold; }
+  .dialog { @apply max-h-[88vh] overflow-y-auto; }
+  /* Accounts: the first-visit link screen and the board's own page offering a link while setup is open. */
+  .gate { @apply fixed inset-0 z-40 grid place-items-center bg-ink/90 p-4 backdrop-blur; }
+  .gate-card { @apply w-[min(92vw,480px)] rounded-3xl border border-line bg-surface p-6 text-fg shadow-2xl; }
+  .gate-card h2 { @apply mb-3 font-display text-xl font-semibold; }
+  .gate-steps { @apply mb-3 list-decimal space-y-2 pl-5 text-sm; }
+  .pair-banner { @apply flex w-full max-w-xl flex-wrap items-center gap-2 rounded-2xl border border-accent bg-surface px-4 py-2 text-sm; }
   .cmd { @apply mt-[12vh] w-[min(94vw,560px)] overflow-hidden rounded-3xl border border-line bg-surface/95 p-0 text-fg shadow-2xl backdrop:bg-black/50 backdrop:backdrop-blur-sm; }
   .cmd-in { @apply flex items-center gap-3 border-b border-line px-4 text-muted; }
   .cmd-in input { @apply h-14 grow bg-transparent text-base text-fg placeholder:text-muted/70 focus:outline-none; }

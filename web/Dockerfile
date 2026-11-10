@@ -6,12 +6,15 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-# Stage 2: Caddy serves the built panel and the firmware image on Railway's $PORT.
-# The broker password and Spotify client ID come from service variables at start.
-# Variables: MQTT_USER/MQTT_PASS (the panel's broker login), SPOTIFY_CLIENT_ID, and PANEL_USER/PANEL_PASS to put a
-# login in front of the page (leave PANEL_PASS unset for no login).
-FROM caddy:2.8.4-alpine
-COPY Caddyfile Caddyfile.auth /etc/caddy/
-COPY start.sh /start.sh
-COPY --from=build /w/dist /srv
-CMD ["/start.sh"]
+# Stage 2: a small Node server (server/index.mjs) serves the panel and the firmware image on Railway's $PORT and,
+# once OWNER_PASS and the broker admin login are set, handles logins, board links and per-board broker accounts.
+# Without those it works as before: MQTT_USER/MQTT_PASS go into config.js and PANEL_USER/PANEL_PASS put a login in
+# front of the page. Accounts keep their state in DATA_DIR, which must be a Railway volume (mounted at /data).
+FROM node:22-alpine
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY server ./server
+COPY --from=build /w/dist ./dist
+ENV STATIC_DIR=/app/dist DATA_DIR=/data NODE_ENV=production
+CMD ["node", "server/index.mjs"]

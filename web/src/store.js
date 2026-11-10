@@ -9,6 +9,7 @@ import { rgbHex } from './color';
 const CFG = window.LEDIFY_CONFIG || {};
 const unset = v => !v || v.startsWith('__');          // "__X__" means a local copy without that value injected
 export const LOCAL = !!CFG.local;
+export const AUTH = !!CFG.auth && !CFG.local;      // the hosted panel with accounts: the server hands out broker logins
 export const DEMO = new URLSearchParams(location.search).has('demo');
 export const BUILT_IN = { url: CFG.mqttUrl || '', user: unset(CFG.mqttUser) ? 'ledify' : CFG.mqttUser, pass: unset(CFG.mqttPass) ? '' : CFG.mqttPass };
 export const BOARD_MQTT = CFG.boardMqtt || '';
@@ -19,6 +20,8 @@ export const [ui, setUi] = createStore({
   conn: 'connecting', current: null, devices: {},
   live: { loud: 0, bands: [0, 0, 0], pulse: 0, db: null, spec: null },
   toasts: [], brokerOpen: false, brokerMsg: '',
+  me: null,                 // AUTH: { owner, boards, label } from the server
+  pair: null,               // the board's own page: { id, code } while its setup window is open
 });
 export const dev = () => ui.devices[ui.current] || {};
 export const state = () => dev().state || {};
@@ -105,6 +108,7 @@ export function ingest(topic, payload) {
   const mine = id === ui.current;
   const text = payload.toString();
   if (what === 'reply') { if (mine) onReply(text, id); return; }
+  if (what === 'pair') { const [pid, code] = text.split(' '); setUi('pair', code && code !== 'none' ? { id: pid, code } : null); return; }
   if (what === 'live') {
     if (mine) { try { const j = JSON.parse(text); if (j.loud !== undefined) setUi('live', j); } catch (e) { /* diagnostics payloads */ } }
     return;
@@ -119,12 +123,17 @@ export function connect(c) {
   if (client) client.end(true);
   client = mqtt.connect(c.url, { username: c.user, password: c.pass, keepalive: 30, reconnectPeriod: 2000, clientId: 'panel-' + Math.random().toString(16).slice(2, 8) });
   client.on('connect', () => {
-    if (c !== BUILT_IN) localStorage.setItem('ledify.creds', JSON.stringify(c));
+    if (c !== BUILT_IN && !AUTH) localStorage.setItem('ledify.creds', JSON.stringify(c));
     setUi({ brokerOpen: false, brokerMsg: '' });
-    client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live', 'ledify/+/audio', 'ledify/+/reply']);
+    // With accounts the broker only lets a browser subscribe to its own boards (the owner may use the wildcard).
+    if (AUTH && !c.owner) client.subscribe(c.boards.map(id => 'ledify/' + id + '/#'));
+    else client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live', 'ledify/+/reply']);
     keepLive();
   });
-  client.on('error', e => setUi({ brokerMsg: 'Broker said: ' + e.message, conn: 'broker error', brokerOpen: true }));
+  client.on('error', e => {
+    if (AUTH) { setUi('conn', 'reconnecting'); if (/auth/i.test(e.message)) authConnect(); return; }   // login rotated or access changed
+    setUi({ brokerMsg: 'Broker said: ' + e.message, conn: 'broker error', brokerOpen: true });
+  });
   client.on('close', () => setUi('conn', 'reconnecting'));
   client.on('message', ingest);
 }
@@ -134,7 +143,7 @@ function connectLocal() {
   setUi('conn', 'connecting');
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { setUi('devices', id, { online: true, seen: Date.now() }); setUi({ current: id, conn: 'online' }); send('status'); keepLive(); };
+  ws.onopen = () => { setUi('devices', id, { online: true, seen: Date.now() }); setUi({ current: id, conn: 'online' }); send('status'); keepLive(); ws.send('pair'); };
   ws.onmessage = e => {
     if (typeof e.data !== 'string') return;
     const sp = e.data.indexOf(' ');
@@ -143,11 +152,46 @@ function connectLocal() {
   ws.onclose = () => { ws = null; setUi('conn', 'reconnecting'); setUi('devices', id, 'online', false); setTimeout(connectLocal, 2000); };
   ws.onerror = () => ws && ws.close();
 }
+// Accounts: ask the server who we are and for a broker login for this tab. Called again when the broker refuses the
+// login (the server rotated it, or the owner changed what this browser may see).
+export async function api(path, body) {
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'X-Ledify': '1', 'Content-Type': 'application/json' }, body: body && JSON.stringify(body), credentials: 'same-origin' });
+  let j = {}; try { j = await r.json(); } catch (e) { /* empty */ }
+  if (!r.ok) throw new Error(j.error || 'server said ' + r.status);
+  return j;
+}
+let authBusy = false, authAt = 0;
+export async function authConnect(force) {
+  if (authBusy || (!force && Date.now() - authAt < 4000)) return;
+  authBusy = true; authAt = Date.now();
+  try {
+    setUi('me', await api('/api/me'));
+    if (!ui.me.owner && !ui.me.boards.length) { if (client) client.end(true); client = null; setUi({ conn: 'no boards', devices: {}, current: null }); return; }
+    const b = await api('/api/broker', {});
+    for (const id of Object.keys(ui.devices)) if (!b.owner && !b.boards.includes(id)) setUi('devices', id, undefined);
+    if (ui.current && !ui.devices[ui.current]) setUi('current', null);
+    connect({ url: b.url, user: b.user, pass: b.pass, owner: b.owner, boards: b.boards });
+  } catch (e) { setUi('conn', 'server error'); toast(e.message, 'warn'); }
+  finally { authBusy = false; }
+}
+// A link in the address bar: "#link=<board>.<code>" from the board's own page, "#join=<token>" from a share link.
+async function takeLink() {
+  const m = location.hash.match(/^#(link|join)=([^&]+)/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    if (m[1] === 'link') { const [board, code] = decodeURIComponent(m[2]).split('.'); await api('/api/link', { board, code }); }
+    else await api('/api/join', { token: m[2] });
+    toast('Board linked to this browser', 'info');
+  } catch (e) { toast(e.message, 'warn', 7000); }
+}
+
 export function selectDevice(id) { setUi('current', id); send('status'); keepLive(); }
 export function savedCreds() { try { return JSON.parse(localStorage.getItem('ledify.creds')); } catch (e) { return null; } }
 export function init() {
   if (DEMO) { import('./demo').then(m => m.startDemo()); return; }
   if (LOCAL) connectLocal();
+  else if (AUTH) { takeLink().then(() => authConnect(true)); window.addEventListener('hashchange', () => takeLink().then(() => authConnect(true))); }
   else {
     const saved = savedCreds();
     if (saved && localStorage.getItem('ledify.override')) connect(saved);
