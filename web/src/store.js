@@ -85,6 +85,19 @@ export function publishRaw(suffix, payload) {
   if (LOCAL) { if (ws && ws.readyState === 1) ws.send(suffix === 'audio/set' ? 'audio ' + payload : payload); }
   else if (client) client.publish('ledify/' + ui.current + '/' + suffix, payload);
 }
+// A picture for the LED matrix (see matrix.js): binary, QoS 0, never retained; a frame that would only queue up
+// behind the last one is dropped instead, so a slow link shows fewer frames rather than ever later ones.
+const FRAME_BACKLOG = 8192;
+export function publishFrame(bytes) {
+  if (!ui.current || DEMO) return !!DEMO;
+  if (LOCAL) {
+    if (!ws || ws.readyState !== 1 || ws.bufferedAmount > FRAME_BACKLOG) return false;
+    ws.send(bytes); return true;
+  }
+  if (!client || !client.connected || (client.stream && client.stream.writableLength > FRAME_BACKLOG)) return false;
+  client.publish('ledify/' + ui.current + '/frame/set', bytes, { qos: 0, retain: false });
+  return true;
+}
 // The board streams loudness/bands at 10 Hz while a lease is active; renew it while this tab is visible.
 export function keepLive() { if (ui.current && document.visibilityState === 'visible') send('live 90'); }
 
@@ -121,13 +134,15 @@ export function ingest(topic, payload) {
 export function connect(c) {
   setUi('conn', 'connecting');
   if (client) client.end(true);
-  client = mqtt.connect(c.url, { username: c.user, password: c.pass, keepalive: 30, reconnectPeriod: 2000, clientId: 'panel-' + Math.random().toString(16).slice(2, 8) });
+  client = mqtt.connect(c.url, { username: c.user, password: c.pass, keepalive: 30, reconnectPeriod: 2000, browserBufferSize: 32768, clientId: 'panel-' + Math.random().toString(16).slice(2, 8) });
   client.on('connect', () => {
     if (c !== BUILT_IN && !AUTH) localStorage.setItem('ledify.creds', JSON.stringify(c));
     setUi({ brokerOpen: false, brokerMsg: '' });
     // With accounts the broker only lets a browser subscribe to its own boards (the owner may use the wildcard).
-    if (AUTH && !c.owner) client.subscribe(c.boards.map(id => 'ledify/' + id + '/#'));
-    else client.subscribe(['ledify/+/status', 'ledify/+/state', 'ledify/+/sensors', 'ledify/+/light/state', 'ledify/+/live', 'ledify/+/reply']);
+    // Named topics, not '#': pixel frames go out on frame/set and shouldn't come straight back.
+    const topics = ['status', 'state', 'sensors', 'light/state', 'live', 'reply'];
+    if (AUTH && !c.owner) client.subscribe(c.boards.flatMap(id => topics.map(t => 'ledify/' + id + '/' + t)));
+    else client.subscribe(topics.map(t => 'ledify/+/' + t));
     keepLive();
   });
   client.on('error', e => {
@@ -137,7 +152,8 @@ export function connect(c) {
   client.on('close', () => setUi('conn', 'reconnecting'));
   client.on('message', ingest);
 }
-// Served by the board: one WebSocket, text frames "<topic suffix> <payload>" down, command lines up, binary = audio.
+// Served by the board: one WebSocket, text frames "<topic suffix> <payload>" down, command lines up, binary frames up
+// are matrix pictures (pixels only; nothing binary comes down).
 function connectLocal() {
   const id = CFG.id || 'local';
   setUi('conn', 'connecting');

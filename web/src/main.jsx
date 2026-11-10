@@ -17,6 +17,7 @@ import { ColourLens, EffectsLens, GradientLens } from './lenses/look';
 import { SoundLens } from './lenses/sound';
 import { ZonesLens, TimeLens } from './lenses/space';
 import { LooksLens, BoardLens } from './lenses/more';
+import { MatrixLens } from './lenses/matrix';
 
 const I = d => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" innerHTML={d} />;
 const LENSES = [
@@ -27,6 +28,7 @@ const LENSES = [
   { id: 'zones', name: 'Zones', keys: 'segments split', icon: '<path d="M12 3a9 9 0 0 1 9 9"/><path d="M21 12a9 9 0 0 1-9 9" opacity=".55"/><path d="M12 21a9 9 0 0 1-9-9" opacity=".3"/><path d="M3 12a9 9 0 0 1 9-9" opacity=".8"/>', view: ZonesLens },
   { id: 'time', name: 'Time', keys: 'schedule sleep sunrise alarm timezone', icon: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>', view: TimeLens },
   { id: 'looks', name: 'Looks', keys: 'presets spotify album saved', icon: '<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>', view: LooksLens },
+  { id: 'matrix', name: 'Matrix', keys: 'video screen camera stream picture gif text panel grid pixels', icon: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/>', view: MatrixLens },
   { id: 'board', name: 'Board', keys: 'name rename strip pixels sensors firmware power supply voltage setup broker console', icon: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><rect x="9" y="9" width="6" height="6" rx="1"/>', view: BoardLens },
 ];
 const byId = id => LENSES.find(l => l.id === id);
@@ -52,7 +54,7 @@ function App() {
     onCleanup(() => { window.removeEventListener('popstate', onHash); window.removeEventListener('keydown', keys); });
   });
 
-  // Keyboard: ⌘K or / for the command bar, 1–8 for the lenses, space for power, arrows for brightness, [ ] for effects.
+  // Keyboard: ⌘K or / for the command bar, 1–9 for the lenses, space for power, arrows for brightness, [ ] for effects.
   const keys = e => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setCmdOpen(true); return; }
     if (e.metaKey || e.ctrlKey || e.altKey || document.querySelector('dialog[open]')) return;
@@ -60,7 +62,7 @@ function App() {
     if (e.key === 'Escape' && lens()) { e.preventDefault(); close(); return; }
     if (typing) return;
     if (e.key === '/') { e.preventDefault(); setCmdOpen(true); }
-    else if (/^[1-8]$/.test(e.key)) open(LENSES[+e.key - 1].id);
+    else if (/^[1-9]$/.test(e.key)) open(LENSES[+e.key - 1].id);
     else if (e.key === ' ' && !t.closest('button')) { e.preventDefault(); act.togglePower(); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); act.level((opt.level() ?? 0) + (e.key === 'ArrowUp' ? 13 : -13), true); }
     else if (e.key === '[' || e.key === ']') act.stepMode(e.key === ']' ? 1 : -1);

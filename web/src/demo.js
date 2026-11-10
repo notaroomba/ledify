@@ -9,7 +9,7 @@ const st = {
   pdos: [[5000, 3000], [9000, 3000], [15000, 3000], [20000, 3000]], need_mw: 15000, budget_mw: 51000,
   palette: 'ff3c00@0,ff8c00@35,ff0066@70,4b0082@100', time: '', tz: 'UTC0', name: 'ledify', ip: '', clients: 0, hot: 0,
   board_c: 31.2, sleep: 0, rise: 0, sched: [], segs: [], stream: null, boots: 1, rst: 'poweron', boot_log: [],
-  lux: 142, temp_c: 31.2, pressure_pa: 101325, sound_db: 48, db_peak: 52, loud: 0, axis: 0, motion: 1, hstep: 10,
+  lux: 142, temp_c: 31.2, pressure_pa: 101325, sound_db: 48, db_peak: 52, loud: 0, axis: 0, motion: 1, hstep: 10, mw: 0, mh: 0, mlay: 1,
 };
 let color = { r: 255, g: 255, b: 255 };
 
@@ -47,6 +47,11 @@ function run(cmd) {
   else if (k === 'auto') st.auto = t[1] === 'on' ? 1 : 0;
   else if (k === 'overlay') st.overlay = t[1];
   else if (k === 'type') st.type = t[1];
+  else if (k === 'matrix' && t[1] === 'off') { st.mw = 0; st.mh = 0; }
+  else if (k === 'matrix' && t.length >= 3) {
+    st.mw = +t[1]; st.mh = +t[2]; st.count = Math.max(st.count, st.mw * st.mh);
+    st.mlay = (t.includes('prog') ? 0 : 1) | (t.includes('cols') ? 2 : 0) | (t.some(o => o === 'tr' || o === 'br') ? 4 : 0) | (t.some(o => o === 'bl' || o === 'br') ? 8 : 0);
+  }
   else if (t.length === 2 && typeof st[k] === 'number') st[k] = +t[1];
   else if (['status', 'live', 'audio', 'ota', 'otabase', 'motion'].includes(k)) { /* nothing to show */ }
   else reply = 'demo: that command is only pretend here';

@@ -221,6 +221,14 @@
   .beat { @apply mb-1 h-4 w-4 self-center rounded-full bg-white/10 transition duration-75; }
   .beat.hit { background: rgb(var(--accent)); box-shadow: 0 0 16px rgb(var(--accent)); }
   .meters + .hint { @apply mt-5; }
+  .matrix-view { @apply relative mx-auto grid max-h-64 min-h-8 w-full max-w-sm place-items-center overflow-hidden rounded-xl border border-line bg-black; }
+  .matrix-canvas { @apply h-full w-full; image-rendering: pixelated; }
+  .matrix-idle { @apply absolute text-xs text-muted; }
+  .matrix-setup { @apply flex items-start gap-4; }
+  .wiring { @apply w-28 shrink-0 rounded-lg bg-black/40; }
+  .wiring-px { fill: rgb(255 255 255 / .25); }
+  .wiring-path { fill: none; stroke: rgb(var(--accent)); stroke-width: 1.2; stroke-linejoin: round; opacity: .85; }
+  .wiring-start { fill: #fff; }
 
   .zone-row { @apply rounded-2xl bg-white/[.04] p-2.5; }
   .zone-badge { @apply grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent text-xs text-ink; text-shadow: 0 0 2px rgba(255, 255, 255, .6); }

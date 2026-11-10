@@ -92,10 +92,10 @@ function boardAcls(id) {
 }
 function webAcls(boards) {
   return boards.flatMap(id => [acl('subscribePattern', `ledify/${id}/#`), acl('publishClientSend', `ledify/${id}/cmd`),
-    acl('publishClientSend', `ledify/${id}/audio/set`), noPair(`ledify/${id}/pair`)]);
+    acl('publishClientSend', `ledify/${id}/audio/set`), acl('publishClientSend', `ledify/${id}/frame/set`), noPair(`ledify/${id}/pair`)]);
 }
 const OWNER_ACLS = [acl('subscribePattern', 'ledify/#'), acl('publishClientSend', 'ledify/+/cmd'),
-  acl('publishClientSend', 'ledify/+/audio/set'), noPair('ledify/+/pair')];
+  acl('publishClientSend', 'ledify/+/audio/set'), acl('publishClientSend', 'ledify/+/frame/set'), noPair('ledify/+/pair')];
 const FULL_ACLS = [acl('subscribePattern', 'ledify/#'), acl('subscribePattern', 'homeassistant/#'),
   acl('publishClientSend', 'ledify/#'), acl('publishClientSend', 'homeassistant/#'), noPair('ledify/+/pair')];
 const SERVER_ACLS = [acl('subscribePattern', 'ledify/+/pair'), acl('subscribePattern', 'ledify/+/state'),
