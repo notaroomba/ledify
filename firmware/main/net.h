@@ -15,9 +15,11 @@ bool net_fallback_try(const char *ssid_or_n);                // join this fallba
 bool net_save_mqtt(const char *url, const char *user, const char *pass);
 void net_status(char *out, size_t n);        // short human-readable line
 bool net_mqtt_connected(void);
-const char *net_ip(void);                    // "" until connected
+const char *net_ip(void);
+const char *net_id(void);                    // "ledify_xxxxxx", the MQTT client id and topic prefix                    // "" until connected
 // Publish state. light_json follows Home Assistant's JSON light schema; status_json is the
 // full status() output; sensors_json carries the readings used by the discovered sensors.
 void net_publish(const char *light_json, const char *status_json, const char *sensors_json);
 void net_publish_live(const char *json);   // not retained, QoS 0
 void net_publish_reply(const char *text);  // command replies, not retained
+void net_publish_pair(void);               // the setup window's code on ledify/ID/pair (see pair_code in cmd.h)

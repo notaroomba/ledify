@@ -137,7 +137,7 @@ static esp_err_t h_ws(httpd_req_t *req)
     if (!is_client(fd)) {                                            // only sockets that passed the origin check
         return ESP_FAIL;
     }
-    cmd_t c = {0};
+    cmd_t c = { .src = CMD_SRC_WS };
     uint8_t buf[sizeof c.text];
     if (f.len >= sizeof buf) {
         return ESP_OK;
@@ -187,6 +187,13 @@ void web_publish(const char *light_json, const char *status_json, const char *se
 void web_publish_live(const char *json)
 {
     send_text("live", json);
+}
+
+void web_send_pair(const char *board_id, const char *code)
+{
+    char p[48];
+    snprintf(p, sizeof p, "%s %s", board_id, code);
+    send_text("pair", p);
 }
 
 void web_publish_reply(const char *text)

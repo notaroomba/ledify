@@ -29,6 +29,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_attr.h"
 #include "nvs_flash.h"
@@ -233,6 +234,24 @@ static bool save_str(const char *key, const char *val)
     return e == ESP_OK;
 }
 
+// Setup window: holding the button 3 s opens it for 2 minutes. Wi-Fi, broker and OTA-source commands are only taken
+// from the USB console or while it is open, and its one-time code lets whoever is at the board link a browser to it.
+#define PAIR_HOLD_US   3000000
+#define PAIR_WINDOW_US (120LL * 1000000)
+static int64_t pair_until;
+static char pair_buf[11];
+static int cmd_src;                         // CMD_SRC_* of the command being handled
+
+const char *pair_code(void)
+{
+    return pair_until && esp_timer_get_time() < pair_until ? pair_buf : NULL;
+}
+
+static int pair_secs_left(void)
+{
+    return pair_code() ? (int)((pair_until - esp_timer_get_time()) / 1000000) + 1 : 0;
+}
+
 static bool load_str(const char *key, char *buf, size_t n)
 {
     nvs_handle_t h;
@@ -362,7 +381,7 @@ static void load_cfg(void)
 // (Don't set O_NONBLOCK: in that mode the console VFS only looks at the driver's buffer, which doesn't exist.)
 static void console_task(void *arg)
 {
-    cmd_t cmd;
+    cmd_t cmd = { .src = CMD_SRC_CONSOLE };
     int len = 0;
     for (;;) {
         char c;
@@ -642,9 +661,9 @@ static void status(char *out, size_t n)
     const pd_state_t *pd = pd_get();
     char net[96];
     net_status(net, sizeof net);
-    int w = snprintf(out, n, "{\"fw\":\"%s\",\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"color\":\"%s\",\"bright\":\"%s\",\"overlay\":\"%s\","
+    int w = snprintf(out, n, "{\"setup\":%d,\"fw\":\"%s\",\"power\":%d,\"volt\":%d,\"mode\":\"%s\",\"color\":\"%s\",\"bright\":\"%s\",\"overlay\":\"%s\","
                      "\"auto\":%d,\"level\":%d,\"count\":%d,\"type\":\"%s\",\"cap\":%d",
-                     esp_app_get_description()->version, power, volt, effect_name(), color_names[color], sound_on ? "sound" : "level", overlay_names[overlay],
+                     pair_secs_left(), esp_app_get_description()->version, power, volt, effect_name(), color_names[color], sound_on ? "sound" : "level", overlay_names[overlay],
                      auto_on, leds_get_level(), leds_get_count(), leds_type_name(), leds_get_cap());
     for (int i = 0; i < N_SETTINGS; i++) {
         w += snprintf(out + w, n - w, ",\"%s\":%d", settings[i].key, *settings[i].val);
@@ -808,6 +827,15 @@ static void handle(char *line)
     }
     static char out[2560];                  // status JSON: about 1.5 KB with every list filled
     int s = setting_idx(tok[0]);
+
+    char base[96];
+    bool setup_cmd = !strcmp(tok[0], "wifi") || !strcmp(tok[0], "mqtt") || !strcmp(tok[0], "otabase")
+                     || (!strcmp(tok[0], "wifi2") && !(n == 2 && !strcmp(tok[1], "list")))
+                     || (!strcmp(tok[0], "ota") && !load_str("ota_base", base, sizeof base));   // OTA from anywhere: setup only
+    if (setup_cmd && cmd_src != CMD_SRC_CONSOLE && !pair_code()) {
+        reply("err setup is locked: hold the board's button for 3 s, then send it within 2 minutes");
+        return;
+    }
 
     if (!strcmp(tok[0], "on") && n == 1) {
         sleep_end = 0;
@@ -1160,14 +1188,43 @@ static void handle(char *line)
         reply(web_set_name(tok[1]) ? "ok" : "err name: letters, digits and dashes");
     } else if (!strcmp(tok[0], "otabase") && n == 2) {            // only accept OTA images from under this URL ("any" clears)
         reply(save_str("ota_base", strcmp(tok[1], "any") ? tok[1] : "") ? "ok" : "err nvs");
+    } else if (!strcmp(tok[0], "pair") && n == 1) {               // the setup window's code, never over MQTT
+        const char *c = pair_code();
+        char p[48];
+        snprintf(p, sizeof p, "pair %s %s", net_id(), c ? c : "none");
+        if (cmd_src == CMD_SRC_BLE) {
+            ble_send(p);
+        } else if (cmd_src == CMD_SRC_WS) {
+            web_send_pair(net_id(), c ? c : "none");
+        } else if (cmd_src == CMD_SRC_CONSOLE) {
+            ESP_LOGI(TAG, "%s", p);
+        } else {
+            reply("err pair: only over USB, Bluetooth or the board's own page");
+        }
     } else if (!strcmp(tok[0], "help")) {
         reply("on off blink<n> rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
               "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> scroll<px/s> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
-              "name<host> live<s> mic<s> motion<|s|cal|zero> axis<0-5> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
+              "name<host> pair live<s> mic<s> motion<|s|cal|zero> axis<0-5> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
+}
+
+static void pair_open(void)
+{
+    static const char abc[] = "23456789abcdefghjkmnpqrstuvwxyz";     // no 0/o, 1/l/i: read off a screen
+    for (int i = 0; i < 10; i++) {
+        pair_buf[i] = abc[esp_random() % (sizeof abc - 1)];
+    }
+    pair_buf[10] = 0;
+    pair_until = esp_timer_get_time() + PAIR_WINDOW_US;
+    ESP_LOGI(TAG, "setup window open for 2 minutes");
+    net_publish_pair();
+    web_send_pair(net_id(), pair_buf);
+    char b[] = "blink 3";                                           // three blue flashes: the window is open
+    cmd_src = CMD_SRC_OTHER;
+    handle(b);
 }
 
 void app_main(void)
@@ -1246,6 +1303,7 @@ void app_main(void)
         leds_set_budget_mw(power_budget_mw());
         if (xQueueReceive(cmd_q, &cmd, 0)) {
             bool quiet = !strncmp(cmd.text, "audio ", 6);
+            cmd_src = cmd.src;
             handle(cmd.text);
             frame();
             if (!quiet && !pub_due) {
@@ -1265,6 +1323,10 @@ void app_main(void)
         } else if (!btn && btn_was && now - btn_down > 40000 && now - btn_down < 1000000) {
             set_power(!power);
             frame();
+            pub_due = now + 150000;
+        } else if (btn && btn_was && btn_down && now - btn_down > PAIR_HOLD_US) {   // held 3 s: open the setup window
+            btn_down = 0;
+            pair_open();
             pub_due = now + 150000;
         }
         btn_was = btn;

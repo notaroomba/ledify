@@ -215,13 +215,39 @@ DDP (or E1.31) with the board's IP and the pixel count; xLights and Hyperion use
 broker settings to a new board over the Nordic UART service, so the USB console is only needed for the first flash.
 A saved network setting restarts the board two seconds later so several can be sent in a row.
 
-**Panel login and broker users.** The hosted panel reads its broker login from the page, so anyone with the URL
-could use it. Two things close that: the `panel` service gets `PANEL_USER` and `PANEL_PASS` variables, and Caddy
-then asks for that login for everything except `/firmware/*` (the board fetches images without credentials); and
-the broker gets a second user with an ACL that can only read `ledify/#` and write `ledify/+/cmd` and
-`ledify/+/audio/set` (variables `PANEL_MQTT_USER` and `PANEL_MQTT_PASS` on the mosquitto service, `MQTT_USER` and
-`MQTT_PASS` on the panel service), while the boards and Home Assistant keep the full `ledify` user. `otabase` pins
-where firmware may come from. Cloudflare Access in front of `ledify.notaroomba.dev` is the stricter option.
+**Accounts, board links and sharing.** The hosted panel's server (`web/server/index.mjs`) gives every board and
+every browser its own broker account through Mosquitto's dynamic security plugin, so no shared password reaches a
+browser. Anyone can open the panel, but a browser only sees the boards it has been linked to:
+
+- Hold a board's button for 3 s (three blue flashes). For 2 minutes its *setup window* is open: it sends a one-time
+  code to `ledify/<id>/pair`, which only the panel server can read, and to its own page and Bluetooth. Its own page
+  (`http://NAME.local`) then shows **Link this browser**, which opens the hosted panel and links it. The first link of
+  a board still on the old shared login also gives it its own broker account (the server sends it `mqtt ...`).
+- The owner logs in with `OWNER_PASS` ("remember me", 90 days), sees every board, and in **Access and sharing**
+  makes single-use share links (24 h), removes browsers (their broker account is deleted, which drops them at once)
+  or forgets a board.
+- A browser remembers its boards with an HttpOnly cookie for a year.
+- `wifi`, `wifi2`, `mqtt`, `otabase`, and `ota` while no `otabase` is saved, are refused unless they come from the USB
+  console or arrive while the setup window is open. `pair` returns the code over USB, Bluetooth or the board's own
+  page, never over MQTT.
+
+Setting it up on Railway (accounts stay off, and everything works as before, until `OWNER_PASS` is set):
+
+1. **mosquitto** service: add a volume at `/mosquitto/data`, variables `ADMIN_USER` and `ADMIN_PASS`, and this start
+   command (it replaces the password file with the dynamic security plugin):
+
+   ```bash
+   sh -c '[ -f /mosquitto/data/dynsec.json ] || mosquitto_ctrl dynsec init /mosquitto/data/dynsec.json "$ADMIN_USER" "$ADMIN_PASS"; chown -R mosquitto:mosquitto /mosquitto/data; printf "listener 1883\nlistener 8080\nprotocol websockets\nallow_anonymous false\nplugin /usr/lib/mosquitto_dynamic_security.so\nplugin_opt_config_file /mosquitto/data/dynsec.json\npersistence false\nlog_dest stdout\n" > /mosquitto/config/mosquitto.conf && exec mosquitto -c /mosquitto/config/mosquitto.conf'
+   ```
+
+2. **panel** service: add a volume at `/data` (the board list, links and board passwords live there) and the
+   variables `OWNER_PASS`, `BROKER_ADMIN_URL=mqtt://mosquitto.railway.internal:1883`, `BROKER_ADMIN_USER` and
+   `BROKER_ADMIN_PASS` (the same as the mosquitto service's admin), `MQTT_WS_URL=wss://<broker domain>` and
+   `BOARD_MQTT_URL=wss://<broker domain>:443/`. While boards move over, `LEGACY_MQTT_USER`/`LEGACY_MQTT_PASS` keep
+   the old shared login working (it can no longer read setup codes); `HA_MQTT_USER`/`HA_MQTT_PASS` give Home Assistant
+   its own account. Remove `MQTT_USER`, `MQTT_PASS` and `PANEL_PASS`.
+3. Link each board once (button, then its own page), point Home Assistant at its own account, then delete the
+   `LEGACY_*` variables and the broker's TCP proxy.
 
 **Install and demo.** The hosted panel is a PWA: "Add to Home Screen" on a phone gives it an icon and a standalone
 window. `https://.../?demo` runs it against a pretend board for trying the controls without hardware.

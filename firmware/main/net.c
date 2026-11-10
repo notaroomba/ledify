@@ -43,7 +43,7 @@ static char ip[16];
 static bool wifi_up, mqtt_up;
 static esp_mqtt_client_handle_t mqtt;
 static char prefix[32];                   // ledify/ID/
-static char t_cmd[48], t_set[48], t_any[48], t_live[48], t_reply[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
+static char t_cmd[48], t_set[48], t_any[48], t_pair[48], t_live[48], t_reply[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
 
 static bool load(const char *key, char *buf, size_t n)
 {
@@ -171,7 +171,7 @@ bool net_save_mqtt(const char *url, const char *user, const char *pw)
 
 static void queue_cmd(const char *data, int len)
 {
-    cmd_t c = {0};
+    cmd_t c = { .src = CMD_SRC_MQTT };
     if (len >= (int)sizeof c.text) {
         len = sizeof c.text - 1;
     }
@@ -301,6 +301,7 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
         esp_mqtt_client_subscribe(mqtt, t_any, 1);
         esp_mqtt_client_publish(mqtt, t_avail, "online", 0, 1, 1);
         discover();
+        net_publish_pair();                           // a setup window opened while offline
         queue_cmd("status", 6);                       // publish a first state right away
         break;
     case MQTT_EVENT_DISCONNECTED:
@@ -385,6 +386,7 @@ void net_init(QueueHandle_t q)
     snprintf(t_cmd, sizeof t_cmd, "%scmd", prefix);
     snprintf(t_set, sizeof t_set, "%slight/set", prefix);
     snprintf(t_any, sizeof t_any, "%s+/set", prefix);
+    snprintf(t_pair, sizeof t_pair, "%spair", prefix);
     snprintf(t_live, sizeof t_live, "%slive", prefix);
     snprintf(t_reply, sizeof t_reply, "%sreply", prefix);
     snprintf(t_lstate, sizeof t_lstate, "%slight/state", prefix);
@@ -429,6 +431,11 @@ bool net_mqtt_connected(void)
     return mqtt_up;
 }
 
+const char *net_id(void)
+{
+    return id;
+}
+
 const char *net_ip(void)
 {
     return wifi_up ? ip : "";
@@ -460,6 +467,15 @@ void net_publish_live(const char *json)
 {
     if (mqtt_up) {
         esp_mqtt_client_publish(mqtt, t_live, json, 0, 0, 0);
+    }
+}
+
+// The setup window's code for the panel server (the broker lets only the server read ledify/ID/pair). Not retained.
+void net_publish_pair(void)
+{
+    const char *code = pair_code();
+    if (mqtt_up && code) {
+        esp_mqtt_client_publish(mqtt, t_pair, code, 0, 1, 0);
     }
 }
 
