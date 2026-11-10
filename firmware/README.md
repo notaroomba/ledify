@@ -84,7 +84,6 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `name HOST` | mDNS hostname for the local panel, `http://HOST.local` (default `ledify`). Saved |
 | `otabase URL` | Only accept `ota` images whose URL starts with this (`otabase any` clears it), so a leaked broker login cannot flash other firmware. Saved |
 | `live N` | Stream loudness, bands, pulse, dB, the brightness cap, the 16-band spectrum (`spec`) and the estimated sound-to-light delay in ms (`lat`), the tempo (`bpm`) and how sure the tracker is (`lock`, 0-100) to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
-| `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
 | `mic [N]` | Print the microphone level on the USB console 4 times a second for N seconds (default 10, 0 stops): the loudest 8 ms block as dBFS and approximate dB SPL, the raw 24-bit min/max/mean, and a bar. A quiet room should sit around -60 to -70 dBFS and a clap should jump 30 dB or more. All zeros or a fixed value means no data from the mic |
 | `motion [N\|cal\|zero]` | The IMU: alone, a JSON snapshot (calibration state, tilt, heading, energy, gyro bias); `motion N` prints it on the USB console 4 times a second for N seconds; `motion cal` calibrates again (hold the board still for a second); `motion zero` makes the way the board sits now count as level and resets the heading |
 | `axis N` | Which board axis the strip runs along, for the motion styles: 0 +x, 1 +y, 2 +z, 3 -x, 4 -y, 5 -z, default 0. Saved |
@@ -198,15 +197,14 @@ linearly, at `tmax` the strip is dark, and the panel says so.
 **Local panel, no cloud.** With Wi-Fi up the board announces itself over mDNS and serves the same panel at
 `http://ledify.local/` (the `name` setting) from its own flash; that page talks to the board over a WebSocket on
 the LAN, so it works with the internet down. The hosted panel shows the link. The WebSocket carries the MQTT
-payloads as text frames (`state {...}`, `live {...}`, `reply ok`, binary frames are the microphone) and takes
+payloads as text frames (`state {...}`, `live {...}`, `reply ok`, no binary frames) and takes
 command lines back. Only the board's own page may open it: the `Host` must be `NAME.local`, `NAME` or the board's IP
 and a browser's `Origin` must match, so another website open on the same network can't drive the board or listen
 to the mic.
 
-**Microphone audio.** The mic only streams after a `listen N` command (at most 300 s, off at every boot; the panel
-renews it every 45 s while you listen) and only back the way the request came: a listen over MQTT goes to
-`ledify/<id>/audio` on the broker, a listen from the board's WebSocket stays on the LAN, and one from the USB console
-or Bluetooth goes to both.
+**Microphone audio.** Raw audio never leaves the board: there is no command, topic or WebSocket frame that
+carries it. The mic is only analysed on the board, and what goes out (the `live` topic, the status JSON) is levels:
+loudness, three bands, a 16-band spectrum at 10 Hz, dB, the beat and BPM. That is too coarse to rebuild speech from.
 
 **Pixel streams.** The board listens for DDP on UDP 4048 and E1.31/sACN on UDP 5568 (170 pixels per universe,
 universes 1 and up, unicast or the 239.255.0.U multicast groups). While frames arrive they are shown as they come,
@@ -256,7 +254,6 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | `ledify/<id>/audio/set` | in | `L B M T P` from the web panel's audio analysis (file or microphone) |
 | `ledify/<id>/reply` | out | The text reply to the last command (`ok`, `err ...`), what the console and BLE see |
 | `ledify/<id>/live` | out | `{"loud","bands","pulse","db","cap"}` at 10 Hz while a `live` lease is active |
-| `ledify/<id>/audio` | out | 1 KB binary messages of 16 kHz 16-bit little-endian PCM while a `listen` lease is active |
 | `ledify/<id>/light/state` | out | JSON light state |
 | `ledify/<id>/state` | out | Same JSON as `status` |
 | `ledify/<id>/sensors` | out | `{"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}` (kPa, approximate dB SPL) |

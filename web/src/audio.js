@@ -1,29 +1,8 @@
-// Listen: the board streams 16 kHz 16-bit PCM while a lease is active.
+// The board never sends its microphone audio anywhere; only the light analysis leaves it.
 // Feed: analyse a file or this device's mic and send "loud bass mid treble pulse spectrum" to the board 40 times a
 // second. The spectrum is the board's 16 log bands (SPEC_HZ), two hex digits each, for the eq style.
 import { createSignal } from 'solid-js';
-import { send, publishRaw, setUi, toast, hooks } from './store';
-
-const [on, setOn] = createSignal(false), [lstate, setLstate] = createSignal('off'), [vol, setVol] = createSignal(40);
-let lctx, lnext = 0, ltimer;
-hooks.audio = buf => {
-  if (!on()) return;
-  const pcm = new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + (buf.length & ~1)));   // copy: MQTT payloads often start at an odd offset, which Int16Array rejects
-  const ab = lctx.createBuffer(1, pcm.length, 16000), ch = ab.getChannelData(0), g = vol() / 32768;
-  for (let i = 0; i < pcm.length; i++) ch[i] = Math.max(-1, Math.min(1, pcm[i] * g));
-  const src = lctx.createBufferSource(); src.buffer = ab; src.connect(lctx.destination);
-  const t = Math.max(lnext, lctx.currentTime + 0.08);
-  src.start(t); lnext = t + ab.duration;
-  setLstate('playing');
-};
-function toggle() {
-  if (on()) { setOn(false); clearInterval(ltimer); send('listen 0'); setLstate('off'); return; }
-  if (!lctx) lctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (lctx.state === 'suspended') lctx.resume();
-  setOn(true); lnext = 0; send('listen 60'); ltimer = setInterval(() => send('listen 60'), 45000);
-  setLstate('waiting for audio');
-}
-export const listen = { on, state: lstate, vol, setVol, toggle };
+import { publishRaw, setUi, toast } from './store';
 
 const [active, setActive] = createSignal(false), [sens, setSens] = createSignal(4);
 let actx, analyser, asrc, atimer, aelem, apeak = 1, bpeak = [1, 1, 1], aavg = 0, apulse = 0, speak = Array(16).fill(40);

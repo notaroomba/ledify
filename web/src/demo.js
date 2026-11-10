@@ -48,7 +48,7 @@ function run(cmd) {
   else if (k === 'overlay') st.overlay = t[1];
   else if (k === 'type') st.type = t[1];
   else if (t.length === 2 && typeof st[k] === 'number') st[k] = +t[1];
-  else if (['status', 'live', 'listen', 'audio', 'ota', 'otabase', 'motion'].includes(k)) { /* nothing to show */ }
+  else if (['status', 'live', 'audio', 'ota', 'otabase', 'motion'].includes(k)) { /* nothing to show */ }
   else reply = 'demo: that command is only pretend here';
   st.cap = st.limit ? Math.min(st.level, 120) : st.level;
   pub();

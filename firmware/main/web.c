@@ -76,7 +76,7 @@ static bool is_client(int fd)
     return false;
 }
 
-// The WebSocket takes every command (including "listen", which streams the mic), so only this board's own page may
+// The WebSocket takes every command (including OTA and the Wi-Fi and broker settings), so only this board's own page may
 // open it. Browsers let any site open a WebSocket to a LAN address, so a page somewhere else could otherwise drive
 // the board from a visitor's browser. The Host must name the board (NAME.local, NAME or its IP: that also stops DNS
 // rebinding, where an outside name is pointed at the board), and a browser's Origin must be that same host.
@@ -137,7 +137,7 @@ static esp_err_t h_ws(httpd_req_t *req)
     if (!is_client(fd)) {                                            // only sockets that passed the origin check
         return ESP_FAIL;
     }
-    cmd_t c = { .src = CMD_SRC_WS };
+    cmd_t c = {0};
     uint8_t buf[sizeof c.text];
     if (f.len >= sizeof buf) {
         return ESP_OK;
@@ -194,14 +194,6 @@ void web_publish_reply(const char *text)
     send_text("reply", text);
 }
 
-void web_publish_audio(const void *pcm, int len)
-{
-    if (!hd || !nclients) {
-        return;
-    }
-    httpd_ws_frame_t f = { .type = HTTPD_WS_TYPE_BINARY, .payload = (uint8_t *)pcm, .len = len };
-    send_all(&f);
-}
 
 int web_clients(void)
 {

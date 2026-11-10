@@ -2,7 +2,7 @@
 import { For, Show } from 'solid-js';
 import { ui, state, optimistic } from '../store';
 import { Slider, Group } from '../ui';
-import { listen, feed } from '../audio';
+import { feed } from '../audio';
 
 export function SoundLens() {
   const [gain, setGain] = optimistic('gain', () => state().gain);
@@ -21,19 +21,12 @@ export function SoundLens() {
       <div class="meter loud"><i style={{ height: pct(ui.live.loud) }} /><span>loud</span></div>
       <div class="beat" classList={{ hit: ui.live.pulse > 128 }} aria-label="beat" />
     </div>
-    <p class="hint text-center">{feed.active() ? 'listening to this device' : "listening to the board's mic"}{ui.live.db != null ? ' · ' + Math.round(ui.live.db) + ' dB' : ''}{ui.live.lat ? ' · ' + ui.live.lat + ' ms to the LEDs' : ''}</p>
+    <p class="hint text-center">{feed.active() ? 'reacting to this device' : "reacting to the board's mic"}{ui.live.db != null ? ' · ' + Math.round(ui.live.db) + ' dB' : ''}{ui.live.lat ? ' · ' + ui.live.lat + ' ms to the LEDs' : ''}</p>
     <Group title="Reaction">
       <Slider label="Mic gain" min={1} max={100} value={gain} set={setGain} send={v => 'gain ' + v} />
       <Show when={state().react !== undefined}>
         <Slider label="Snappiness" min={1} max={100} value={react} set={setReact} send={v => 'react ' + v} />
       </Show>
-    </Group>
-    <Group title="Hear the board">
-      <div class="row">
-        <button type="button" class="btn" classList={{ 'btn-primary': listen.on() }} onClick={listen.toggle}>{listen.on() ? 'Stop listening' : 'Listen to its mic'}</button>
-        <span class="hint">{listen.state()}</span>
-      </div>
-      <Slider label="Volume" min={1} max={200} value={listen.vol} set={listen.setVol} />
     </Group>
     <Group title="Music from this device" aside="sent to the board 20 times a second">
       <div class="row">

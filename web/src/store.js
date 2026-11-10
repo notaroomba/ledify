@@ -35,7 +35,7 @@ export function boardLabel(id) {
 }
 // A typed name made into a valid hostname: spaces become dashes, anything else not a letter, digit or dash is dropped.
 export const slugName = t => t.trim().replace(/\s+/g, '-').replace(/[^A-Za-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 31);
-export const hooks = { audio: null, demo: null };      // raw PCM chunks go straight to the listen player; demo takes commands
+export const hooks = { demo: null };                  // demo takes commands
 
 const touched = new Map();
 export const touch = k => touched.set(k, Date.now());
@@ -103,7 +103,6 @@ export function ingest(topic, payload) {
   if (!ui.devices[id]) setUi('devices', id, { online: false, seen: 0 });
   if (!ui.current) { setUi('current', id); send('status'); keepLive(); }
   const mine = id === ui.current;
-  if (what === 'audio') { if (mine && hooks.audio) hooks.audio(payload); return; }
   const text = payload.toString();
   if (what === 'reply') { if (mine) onReply(text, id); return; }
   if (what === 'live') {
@@ -137,7 +136,7 @@ function connectLocal() {
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => { setUi('devices', id, { online: true, seen: Date.now() }); setUi({ current: id, conn: 'online' }); send('status'); keepLive(); };
   ws.onmessage = e => {
-    if (typeof e.data !== 'string') { if (hooks.audio) hooks.audio(new Uint8Array(e.data)); return; }
+    if (typeof e.data !== 'string') return;
     const sp = e.data.indexOf(' ');
     if (sp > 0) ingest('ledify/' + id + '/' + e.data.slice(0, sp), e.data.slice(sp + 1));
   };

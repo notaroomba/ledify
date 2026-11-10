@@ -15,4 +15,3 @@ int web_clients(void);                       // WebSocket connections right now
 void web_publish(const char *light_json, const char *status_json, const char *sensors_json);
 void web_publish_live(const char *json);
 void web_publish_reply(const char *text);
-void web_publish_audio(const void *pcm, int len);

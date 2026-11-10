@@ -23,7 +23,7 @@ float mic_db_peak(void);                 // loudest block of the last minute, ap
 // "mic" console meter: loudest block RMS (0..1 of full scale) since the last call, and the current block's raw
 // 24-bit min/max/mean, so a dead mic (all 0, stuck at -1, or DC only) is plain to see. Resets the peak.
 float mic_meter(int32_t *mn, int32_t *mx, int32_t *mean);
-void mic_listen(int secs);               // stream 16 kHz PCM to MQTT for this long (the panel renews it) // worst block time (budget 8000 us) and lost blocks since last call
+// worst block time (budget 8000 us) and lost blocks since last call
 // Beat prediction: once the tempo tracker (beat.c) has locked, beats are fired lead_us before they are due instead
 // of when an onset is heard, so the LEDs light on the beat. Off: every beat is a detected onset, as before.
 void mic_set_predict(bool on);

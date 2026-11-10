@@ -7,8 +7,6 @@
 //                          auto (ON/OFF), gain, lux_lo, lux_hi, night, temp_lo, temp_hi, temp (a reading in C)
 //   ledify/ID/light/state  JSON light state
 //   ledify/ID/state        full status JSON
-//   ledify/ID/audio        16 kHz 16-bit PCM while a "listen N" sent over MQTT is active (off at boot; a listen from
-//                          the board's own WebSocket streams only there)
 //   ledify/ID/reply        the text reply to the last command (ok / err ...), for the panel
 //   ledify/ID/live         {"loud","bands","pulse","db","cap","lat","spec"} at 10 Hz while "live N" is active
 //   ledify/ID/audio/set    "L B M T P [SPEC]" loudness, bands, pulse and optionally 16 bands as 32 hex digits (overrides the mic)
@@ -24,8 +22,6 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_crt_bundle.h"
-#include "esp_timer.h"
-#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "mqtt_client.h"
 #include "nvs_flash.h"
@@ -47,7 +43,7 @@ static char ip[16];
 static bool wifi_up, mqtt_up;
 static esp_mqtt_client_handle_t mqtt;
 static char prefix[32];                   // ledify/ID/
-static char t_cmd[48], t_set[48], t_any[48], t_live[48], t_audio[48], t_reply[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
+static char t_cmd[48], t_set[48], t_any[48], t_live[48], t_reply[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
 
 static bool load(const char *key, char *buf, size_t n)
 {
@@ -175,7 +171,7 @@ bool net_save_mqtt(const char *url, const char *user, const char *pw)
 
 static void queue_cmd(const char *data, int len)
 {
-    cmd_t c = { .src = CMD_SRC_MQTT };
+    cmd_t c = {0};
     if (len >= (int)sizeof c.text) {
         len = sizeof c.text - 1;
     }
@@ -390,7 +386,6 @@ void net_init(QueueHandle_t q)
     snprintf(t_set, sizeof t_set, "%slight/set", prefix);
     snprintf(t_any, sizeof t_any, "%s+/set", prefix);
     snprintf(t_live, sizeof t_live, "%slive", prefix);
-    snprintf(t_audio, sizeof t_audio, "%saudio", prefix);
     snprintf(t_reply, sizeof t_reply, "%sreply", prefix);
     snprintf(t_lstate, sizeof t_lstate, "%slight/state", prefix);
     snprintf(t_state, sizeof t_state, "%sstate", prefix);
@@ -465,54 +460,6 @@ void net_publish_live(const char *json)
 {
     if (mqtt_up) {
         esp_mqtt_client_publish(mqtt, t_live, json, 0, 0, 0);
-    }
-}
-
-// Raw microphone audio while "listen" is active: 16 kHz, 16-bit, little endian, 1 KB per message. Enqueued
-// (not sent inline) so the mic task never waits on the network; the outbox just drops behind if Wi-Fi is slow.
-static StreamBufferHandle_t audio_sb;
-
-// Each route has its own deadline, so a listen from the LAN panel never puts audio on the broker and the reverse.
-static volatile int64_t to_mqtt_until, to_ws_until;
-
-int net_listen(int src, int secs)
-{
-    int64_t now = esp_timer_get_time(), t = now + (int64_t)secs * 1000000;
-    if (src != CMD_SRC_WS) {
-        to_mqtt_until = t;
-    }
-    if (src != CMD_SRC_MQTT) {
-        to_ws_until = t;
-    }
-    int64_t end = to_mqtt_until > to_ws_until ? to_mqtt_until : to_ws_until;
-    return end > now ? (int)((end - now + 999999) / 1000000) : 0;
-}
-
-// A small task drains the stream buffer with blocking QoS 0 publishes, so the mic task never touches the socket.
-static void audio_task(void *arg)
-{
-    static uint8_t buf[1024];
-    for (;;) {
-        size_t n = xStreamBufferReceive(audio_sb, buf, sizeof buf, portMAX_DELAY);
-        int64_t now = esp_timer_get_time();
-        if (n && mqtt_up && now < to_mqtt_until) {
-            esp_mqtt_client_publish(mqtt, t_audio, (const char *)buf, n, 0, 0);
-        }
-        if (n && now < to_ws_until) {
-            web_publish_audio(buf, n);
-        }
-    }
-}
-
-void net_publish_audio(const void *pcm, int len)
-{
-    if (!audio_sb) {
-        audio_sb = xStreamBufferCreate(8192, 1024);                 // a quarter second of audio
-        xTaskCreate(audio_task, "audio", 4096, NULL, 3, NULL);
-    }
-    int64_t now = esp_timer_get_time();
-    if ((mqtt_up && now < to_mqtt_until) || (web_clients() && now < to_ws_until)) {
-        xStreamBufferSend(audio_sb, pcm, len, 0);                   // drops the chunk if Wi-Fi is behind
     }
 }
 

@@ -362,7 +362,7 @@ static void load_cfg(void)
 // (Don't set O_NONBLOCK: in that mode the console VFS only looks at the driver's buffer, which doesn't exist.)
 static void console_task(void *arg)
 {
-    cmd_t cmd = { .src = CMD_SRC_LOCAL };
+    cmd_t cmd;
     int len = 0;
     for (;;) {
         char c;
@@ -778,8 +778,6 @@ static void handle_json(const char *text)
     }
 }
 
-static int cmd_src;                      // CMD_SRC_* of the command being handled
-
 static void handle(char *line)
 {
     while (*line == ' ') {
@@ -974,10 +972,6 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "wifi") && n == 3) {
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         restart_at = esp_timer_get_time() + 2000000;      // in two seconds: more settings may follow (the panel's setup sends several)
-    } else if (!strcmp(tok[0], "listen") && n == 2) {              // stream the mic back to whoever asked (off at boot)
-        int s = atoi(tok[1]);
-        mic_listen(net_listen(cmd_src, s < 0 ? 0 : s > 300 ? 300 : s));
-        reply("ok");
     } else if (!strcmp(tok[0], "mic") && n <= 2) {                // mic [N]: live level on the console for N s (default 10, 0 stops)
         int s = n == 2 ? atoi(tok[1]) : 10;
         if (!have_mic) {
@@ -1170,7 +1164,7 @@ static void handle(char *line)
         reply("on off blink<n> rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
               "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> scroll<px/s> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
-              "name<host> live<s> listen<s> mic<s> motion<|s|cal|zero> axis<0-5> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
+              "name<host> live<s> mic<s> motion<|s|cal|zero> axis<0-5> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -1252,7 +1246,6 @@ void app_main(void)
         leds_set_budget_mw(power_budget_mw());
         if (xQueueReceive(cmd_q, &cmd, 0)) {
             bool quiet = !strncmp(cmd.text, "audio ", 6);
-            cmd_src = cmd.src;
             handle(cmd.text);
             frame();
             if (!quiet && !pub_due) {

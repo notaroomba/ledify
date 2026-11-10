@@ -22,7 +22,7 @@ const LENSES = [
   { id: 'colour', name: 'Colour', keys: 'hue white color', icon: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/><circle cx="12" cy="12" r="3.2"/>', view: ColourLens },
   { id: 'effects', name: 'Effects', keys: 'mode animation overlay auto dim', icon: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="2.5"/>', view: EffectsLens },
   { id: 'gradient', name: 'Gradient', keys: 'palette stripes scroll', icon: '<rect x="3" y="8" width="18" height="8" rx="4"/><circle cx="8" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>', view: GradientLens },
-  { id: 'sound', name: 'Sound', keys: 'mic music audio gain listen', icon: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>', view: SoundLens },
+  { id: 'sound', name: 'Sound', keys: 'mic music audio gain', icon: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>', view: SoundLens },
   { id: 'zones', name: 'Zones', keys: 'segments split', icon: '<path d="M12 3a9 9 0 0 1 9 9"/><path d="M21 12a9 9 0 0 1-9 9" opacity=".55"/><path d="M12 21a9 9 0 0 1-9-9" opacity=".3"/><path d="M3 12a9 9 0 0 1 9-9" opacity=".8"/>', view: ZonesLens },
   { id: 'time', name: 'Time', keys: 'schedule sleep sunrise alarm timezone', icon: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>', view: TimeLens },
   { id: 'looks', name: 'Looks', keys: 'presets spotify album saved', icon: '<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>', view: LooksLens },
