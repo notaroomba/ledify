@@ -9,8 +9,8 @@
 //   ledify/ID/state        full status JSON
 //   ledify/ID/audio        16 kHz 16-bit PCM while "listen N" is active (the panel plays it)
 //   ledify/ID/reply        the text reply to the last command (ok / err ...), for the panel
-//   ledify/ID/live         {"loud","bands","pulse","db","cap"} at 10 Hz while "live N" is active
-//   ledify/ID/audio/set    "L B M T P" loudness, bands and pulse from the panel (overrides the mic)
+//   ledify/ID/live         {"loud","bands","pulse","db","cap","lat","spec"} at 10 Hz while "live N" is active
+//   ledify/ID/audio/set    "L B M T P [SPEC]" loudness, bands, pulse and optionally 16 bands as 32 hex digits (overrides the mic)
 //   ledify/ID/sensors      {"lux":..,"temp_c":..,"pressure_kpa":..,"sound_db":..}
 //   ledify/ID/status       online / offline (retained, last will)
 #include <string.h>
@@ -216,7 +216,7 @@ static void discover(void)
     snprintf(msg, sizeof msg,
              "{\"name\":\"Ledify\",\"uniq_id\":\"%s_light\",\"schema\":\"json\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
              "\"avty_t\":\"%s\",\"brightness\":true,\"supported_color_modes\":[\"rgb\"],\"effect\":true,"
-             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"palette\",\"cover\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
+             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"palette\",\"cover\",\"eq\",\"ripple\",\"mirror\",\"chroma\",\"flow\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
              id, t_set, t_lstate, t_avail, devs);
     esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
 
@@ -250,6 +250,7 @@ static void discover(void)
         {"tmax", "thermal limit", "°C", "mdi:thermometer-alert", "slider", 0, 120},
         {"fade", "transition", "ms", "mdi:transition", "slider", 0, 5000},
         {"scroll", "scroll", "px/s", "mdi:rotate-right", "slider", -200, 200},
+        {"react", "sound react", "", "mdi:waveform", "slider", 1, 100},
     };
     for (int i = 0; i < sizeof nums / sizeof nums[0]; i++) {
         snprintf(topic, sizeof topic, "homeassistant/number/%s_%s/config", id, nums[i].key);

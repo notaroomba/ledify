@@ -19,6 +19,7 @@
 #define BEAT_RATIO 150         // onset: a block this % above the 1 s running average...
 #define BEAT_MIN 256           // ...and above this (gated, gain applied), so a quiet room never beats
 #define BEAT_HOLD 12           // blocks (100 ms) before the next onset counts
+#define BAND_REL 8             // bands: floor at 1/8 (-18 dB) of the loudest band's peak and of FULL
 
 static i2s_chan_handle_t rx;
 static int32_t raw[N];         // one I2S read, 24-bit samples in the top bits
@@ -39,11 +40,35 @@ static uint32_t peak_rms;
 static int64_t peak_at;
 static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
 static volatile int64_t fed_at;
+_Static_assert(MIC_SPEC == FFT_SPEC, "mic.h and fft.h disagree on the spectrum size");
+static volatile uint8_t spec[FFT_SPEC], fed_spec[FFT_SPEC];   // 16 log bands, each against its own recent peak
+static uint32_t spec_peak[FFT_SPEC];
+static volatile uint32_t beats, fed_beats;                    // onsets so far: a style sees every beat even between frames
+static volatile int64_t block_at, fed_block_at;               // when the newest analysis was made, for the latency estimate
 static volatile uint16_t meter_rms;   // loudest block since mic_meter() last read it
 
 static bool fed(void)
 {
     return fed_at && esp_timer_get_time() - fed_at < MIC_FEED_HOLD_MS * 1000LL;
+}
+
+// Each band against its own recent peak (~2 s decay), but never below 1/BAND_REL of the loudest band's peak, so a
+// quiet band stays quiet next to a loud one, and never below FULL/BAND_REL, so a silent room stays dark. (Against
+// FULL alone, as before, mid and treble hardly moved at room levels: the simulator in web/public/sim.html shows it.)
+static void normalise(const uint32_t *mag, uint32_t *pk, volatile uint8_t *out, int n)
+{
+    uint32_t top = 0;
+    for (int k = 0; k < n; k++) {
+        uint32_t b = (mag[k] >> 5) * gain;                     // onto the RMS scale, roughly
+        pk[k] = b > pk[k] ? b : pk[k] - (pk[k] >> 7);
+        top = pk[k] > top ? pk[k] : top;
+    }
+    uint32_t lo = top / BAND_REL > FULL / BAND_REL ? top / BAND_REL : FULL / BAND_REL;
+    for (int k = 0; k < n; k++) {
+        uint32_t b = (mag[k] >> 5) * gain, ref = pk[k] > lo ? pk[k] : lo;
+        uint32_t v = (uint64_t)b * 255 / ref;
+        out[k] = v > 255 ? 255 : v;
+    }
 }
 
 // One 8 ms block: RMS -> gain -> peak follower -> loudness, onset detection, and the FFT bands every 4th block.
@@ -93,6 +118,7 @@ static void block(void)
     if (!hold && sig > BEAT_MIN && sig * 100 > (uint32_t)avg * BEAT_RATIO) {
         pulse = 255;
         hold = BEAT_HOLD;
+        beats++;
     } else {
         pulse -= (pulse + 15) >> 4;
     }
@@ -108,15 +134,13 @@ static void block(void)
             spos = 0;
         }
     }
-    if (++nblock % 4 == 0) {
-        uint32_t m[3];
-        fft_bands(win, m);
-        for (int k = 0; k < 3; k++) {
-            uint32_t b = (m[k] >> 5) * gain;                // onto the RMS scale, roughly
-            bpeak[k] = b > bpeak[k] ? b : bpeak[k] - (bpeak[k] >> 6);
-            bands[k] = (uint64_t)b * 255 / (bpeak[k] > FULL ? bpeak[k] : FULL);
-        }
+    if (++nblock % 2 == 0) {                                  // every 16 ms: the window overlaps the last one by half
+        uint32_t m[3], sp[FFT_SPEC];
+        fft_spectrum(win, m, sp);
+        normalise(m, bpeak, bands, 3);
+        normalise(sp, spec_peak, spec, FFT_SPEC);
     }
+    block_at = now;
 }
 
 static void mic_task(void *arg)
@@ -209,14 +233,36 @@ void mic_stats(uint32_t *max_us, uint32_t *dropped)
     drops = 0;
 }
 
-void mic_feed(uint8_t l, const uint8_t b[3], uint8_t p)
+void mic_feed(uint8_t l, const uint8_t b[3], uint8_t p, const uint8_t *sp)
 {
     fed_loud = l;
     for (int k = 0; k < 3; k++) {
         fed_bands[k] = b[k];
     }
+    for (int k = 0; k < FFT_SPEC; k++) {                 // no spectrum sent (an older panel): spread the three bands over it
+        int f = (fft_spec_edge[k] + fft_spec_edge[k + 1]) / 2;   // centre bin of the band
+        fed_spec[k] = sp ? sp[k] : f < 4 ? b[0] : f < 32 ? b[1] : b[2];
+    }
+    if (p >= 200 && fed_pulse < 200) {                    // the panel sends 255 on an onset and lets it fade
+        fed_beats++;
+    }
     fed_pulse = p;
-    fed_at = esp_timer_get_time();
+    fed_at = fed_block_at = esp_timer_get_time();
+}
+
+void mic_snapshot(mic_snap_t *s)
+{
+    bool f = fed();
+    s->loud = f ? fed_loud : loud;
+    s->pulse = f ? fed_pulse : pulse;
+    for (int k = 0; k < 3; k++) {
+        s->bands[k] = f ? fed_bands[k] : bands[k];
+    }
+    for (int k = 0; k < FFT_SPEC; k++) {
+        s->spec[k] = f ? fed_spec[k] : spec[k];
+    }
+    s->beats = beats + fed_beats;
+    s->at = f ? fed_block_at : block_at;
 }
 
 // Diagnostics for "is any sound reaching the chip": the current block and the loudest block of the last minute.

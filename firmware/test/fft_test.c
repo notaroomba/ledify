@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "fft.h"
 
 static void tone(int16_t x[FFT_N], float hz, float amp)
@@ -44,6 +45,22 @@ int main(void)
     tone(x, 100, 0);
     fft_bands(x, b);
     assert(b[0] == 0 && b[1] == 0 && b[2] == 0);
+    // 16-band spectrum: a tone lands in the band whose bin edges hold it, and the three-band sums are unchanged
+    static const float tones[] = {100, 300, 1000, 3000, 7000};
+    for (int t = 0; t < 5; t++) {
+        int16_t x[FFT_N];
+        uint32_t three[3], three2[3], spec[FFT_SPEC];
+        tone(x, tones[t], 0.5f);
+        fft_spectrum(x, three, spec);
+        fft_bands(x, three2);
+        assert(!memcmp(three, three2, sizeof three));
+        int best = 0;
+        for (int k = 1; k < FFT_SPEC; k++) {
+            best = spec[k] > spec[best] ? k : best;
+        }
+        float bin = tones[t] / 62.5f;
+        assert(bin >= fft_spec_edge[best] - 1 && bin < fft_spec_edge[best + 1] + 1);
+    }
     puts("fft ok");
     return 0;
 }

@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledify sound simulator</title>
+<meta name="description" content="The board's sound pipeline and sound styles, run in the browser on a simulated ICS-43434 microphone.">
+<style>
+  :root { --ink: #0b0d12; --surface: #141821; --raised: #1c2130; --line: #2a3142; --fg: #e8ecf4; --muted: #8a93a6; --accent: #58c6ff; --ok: #3ddc84; --warn: #ffb547; --bad: #ff5c6c; color-scheme: dark; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --ink: #f5f6f9; --surface: #ffffff; --raised: #eef1f6; --line: #d7dce6; --fg: #151922; --muted: #5d6678; --accent: #0a84c9; --ok: #12a150; --warn: #b96f00; --bad: #d22c3c; color-scheme: light; } }
+  :root[data-theme="light"] { --ink: #f5f6f9; --surface: #ffffff; --raised: #eef1f6; --line: #d7dce6; --fg: #151922; --muted: #5d6678; --accent: #0a84c9; --ok: #12a150; --warn: #b96f00; --bad: #d22c3c; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ink); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  p { margin: 0 0 8px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .card { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: 1fr; margin-top: 14px; }
+  @media (min-width: 820px) { .grid { grid-template-columns: 1fr 1fr; } .wide { grid-column: span 2; } }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--raised); color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .btn { height: 40px; padding: 0 16px; border-radius: 12px; border: 1px solid transparent; background: var(--accent); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+  .row { display: grid; grid-template-columns: 96px 1fr 64px; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  #strip { width: 100%; display: block; border-radius: 12px; background: #000; }
+  .meters { display: grid; grid-template-columns: 64px 1fr; gap: 6px 10px; align-items: center; font-size: 12px; color: var(--muted); }
+  .bar { height: 10px; background: var(--raised); border-radius: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; border-radius: 6px; }
+  #spec { width: 100%; height: 70px; display: block; margin-top: 10px; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--raised); vertical-align: middle; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+  .tile { background: var(--raised); border-radius: 12px; padding: 10px; }
+  .tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .tile span { font-size: 12px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { text-align: left; padding: 6px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td:nth-child(2) { font-variant-numeric: tabular-nums; }
+  @media (min-width: 640px) { td:nth-child(2) { white-space: nowrap; } }
+  .scroll { overflow-x: auto; }
+  #start { margin-top: 12px; }
+  .hidden { display: none; }
+  code { font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ledify sound simulator</h1>
+  <p class="muted">The board's own sound pipeline, ported line for line from <code>mic.c</code>, <code>fft.c</code> and <code>fx.c</code>, fed by a simulated ICS-43434 microphone built from its datasheet. The strip below is what the LEDs would show, frame by frame, at the firmware's frame rate.</p>
+  <button id="start" class="btn" type="button">Start</button>
+
+  <div class="grid">
+    <section class="card wide">
+      <canvas id="strip" height="120" aria-label="simulated LED strip"></canvas>
+      <div class="chips" id="modes" style="margin-top:12px"></div>
+      <p class="muted" id="modeDesc" style="margin-top:8px"></p>
+    </section>
+
+    <section class="card">
+      <h2>Sound in</h2>
+      <div class="chips" id="sources"></div>
+      <div class="row" style="margin-top:10px"><label for="level">Room level</label><input id="level" type="range" min="40" max="118" value="78"><output id="levelOut"></output></div>
+      <div class="row"><label for="play">Hear it</label><input id="play" type="range" min="0" max="100" value="0"><output id="playOut"></output></div>
+      <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><label for="file">Audio file</label><input id="file" type="file" accept="audio/*" style="min-width:0;max-width:100%"></div>
+      <p class="muted">Room level is the sound pressure at the board, as the long-term RMS of the signal. For a file or this device's mic, it is the level that a −20 dBFS input stands for, so the dynamics of the recording come through. 60 dB is talking, 80 a loud speaker across the room, 100 a club.</p>
+    </section>
+
+    <section class="card">
+      <h2>Board settings</h2>
+      <div class="row"><label for="gain">gain</label><input id="gain" type="range" min="1" max="100" value="25"><output id="gainOut"></output></div>
+      <div class="row"><label for="react">react</label><input id="react" type="range" min="1" max="100" value="60"><output id="reactOut"></output></div>
+      <div class="row"><label for="bright">level</label><input id="bright" type="range" min="0" max="255" value="200"><output id="brightOut"></output></div>
+      <div class="row"><label for="count">count</label><input id="count" type="range" min="10" max="600" value="120"><output id="countOut"></output></div>
+      <div class="row"><label for="rgb">rgb</label><input id="rgb" type="color" value="#ff5a00"><output></output></div>
+      <div class="chips" id="layouts" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <h2>What the board hears</h2>
+      <div class="meters">
+        <span>Level</span><span id="db" style="color:var(--fg);font-variant-numeric:tabular-nums">–</span>
+        <span>loud</span><div class="bar"><i id="mLoud" style="background:linear-gradient(90deg,var(--ok),var(--warn),var(--bad))"></i></div>
+        <span>bass</span><div class="bar"><i id="mB0" style="background:var(--bad)"></i></div>
+        <span>mid</span><div class="bar"><i id="mB1" style="background:var(--ok)"></i></div>
+        <span>treble</span><div class="bar"><i id="mB2" style="background:var(--accent)"></i></div>
+        <span>beat</span><span><span class="dot" id="beat"></span> <span id="beats" style="margin-left:6px"></span></span>
+      </div>
+      <canvas id="spec" aria-label="16-band spectrum"></canvas>
+    </section>
+
+    <section class="card">
+      <h2>Speed: sound to light</h2>
+      <div class="stats">
+        <div class="tile"><b id="latBeat">–</b><span>beat to LEDs, average (ms)</span></div>
+        <div class="tile"><b id="latMax">–</b><span>worst of the last 20 (ms)</span></div>
+        <div class="tile"><b id="fps">–</b><span>frames per second</span></div>
+        <div class="tile"><b id="hit">–</b><span>drum hits caught</span></div>
+      </div>
+      <p class="muted" style="margin-top:10px" id="latNote">Measured in simulated time from each drum hit in the test signals to the moment its frame has finished going down the wire. It includes the 8 ms sample block, the frame wait and the wire time; it leaves out Wi-Fi, which plays no part when the board's own mic drives the LEDs.</p>
+    </section>
+
+    <section class="card wide">
+      <h2>Microphone model (ICS-43434 datasheet, DS-000069 rev 1.2)</h2>
+      <div class="scroll"><table>
+        <tr><th>Parameter</th><th>Value</th><th>How the simulation uses it</th></tr>
+        <tr><td>Sensitivity</td><td>−26 dBFS ±1 dB</td><td>A 94 dB SPL 1 kHz sine peaks 26 dB below full scale. The firmware's <code>MIC_DB_FULL_SCALE 120</code> follows from this.</td></tr>
+        <tr><td>Acoustic overload point</td><td>120 dB SPL (10 % THD)</td><td>The 24-bit output clips at full scale, which a 120 dB SPL sine just reaches.</td></tr>
+        <tr><td>Equivalent input noise</td><td>29 dBA SPL</td><td>Gaussian self-noise of that level is added before the sensitivity. Applied flat (the datasheet figure is A-weighted), it reads about −91 dBFS against the datasheet's −90 dBFS noise floor.</td></tr>
+        <tr><td>SNR</td><td>65 dBA</td><td>Follows from the two above (94 − 29).</td></tr>
+        <tr><td>High-pass filter</td><td>−3 dB at 24 Hz</td><td>First-order high-pass; it does not scale with the sample rate.</td></tr>
+        <tr><td>Decimation filter</td><td>pass band 0.417 × fS</td><td>At the board's 32 kHz that is 13.3 kHz; modelled as a second-order low-pass there (the real one is steeper, 58 dB stop band).</td></tr>
+        <tr><td>Sample rate</td><td>23 to 51.6 kHz (high-performance mode)</td><td>The board clocks it at 32 kHz; the browser's audio is resampled to that.</td></tr>
+        <tr><td>Data format</td><td>I²S, 24-bit two's complement, 64 SCK per frame</td><td>Samples are rounded to 24 bits and handed to the same code as <code>raw[i] &gt;&gt; 8</code> on the board.</td></tr>
+        <tr><td>Group delay</td><td>2 / fS</td><td>62.5 µs at 32 kHz, included in the latency.</td></tr>
+        <tr><td>Start-up</td><td>under 20 ms</td><td>The firmware throws away the first 100 ms; not simulated.</td></tr>
+      </table></div>
+      <p class="muted" style="margin-top:10px">Not modelled: the mic's frequency-response curve between 60 Hz and 20 kHz (taken as flat), the acoustic port and the PCB hole in front of it, THD below the clip point (0.2 % at 105 dB SPL), and supply noise (PSR −99 dBFS, far below anything the styles react to). The browser's own mic and speakers come in and go out through your device, so “Hear it” and the mic source run with their extra delay; the latency numbers are the board's, in simulated time.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+'use strict';
+// ---- Datasheet values (ICS-43434, DS-000069 rev 1.2) and the board's constants -------------------------------
+const FS = 32000, N = 256;                         // the board's I2S rate and block size (mic.c)
+const DS = { sens: -26, aop: 120, ein: 29, hpf: 24, lpf: 0.417 * FS, delay: 2 / FS };
+const FULL = 32767, PEAK_DECAY = 8, BEAT_RATIO = 150, BEAT_MIN = 256, BEAT_HOLD = 12;
+const SPEC_EDGE = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 21, 27, 35, 46, 60, 80, 128];   // fft.c fft_spec_edge
+const SOUND_FRAME_MS = 16;
+
+// ---- The microphone: pressure in, 24-bit samples out -------------------------------------------------------
+function makeMic() {
+  const hpA = Math.exp(-2 * Math.PI * DS.hpf / FS);
+  let hpX = 0, hpY = 0;
+  // RBJ biquad low-pass at the decimation filter's pass-band edge, Q 0.707
+  const w = 2 * Math.PI * DS.lpf / FS, al = Math.sin(w) / (2 * Math.SQRT1_2), cw = Math.cos(w), a0 = 1 + al;
+  const b0 = (1 - cw) / 2 / a0, b1 = (1 - cw) / a0, b2 = b0, a1 = -2 * cw / a0, a2 = (1 - al) / a0;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  const einPa = 20e-6 * Math.pow(10, DS.ein / 20);
+  const k = Math.pow(10, DS.sens / 20) / Math.SQRT2;          // Pa -> fraction of full scale (94 dB SPL rms = 1 Pa)
+  let spare = null;
+  const gauss = () => {                                       // Box-Muller
+    if (spare !== null) { const s = spare; spare = null; return s; }
+    const u = 1 - Math.random(), v = Math.random(), r = Math.sqrt(-2 * Math.log(u));
+    spare = r * Math.sin(2 * Math.PI * v); return r * Math.cos(2 * Math.PI * v);
+  };
+  return pa => {
+    const p = pa + einPa * gauss();
+    const h = hpA * (hpY + p - hpX); hpX = p; hpY = h;          // first-order high-pass
+    const y = b0 * h + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1; x1 = h; y2 = y1; y1 = y;
+    let d = y * k;
+    d = d > 1 ? 1 : d < -1 ? -1 : d;                            // acoustic overload: clip at full scale
+    return Math.round(d * 8388607);                             // 24-bit two's complement
+  };
+}
+
+// ---- mic.c + fft.c, in the same integer steps ----------------------------------------------------------------
+const sine = new Int16Array(256);
+for (let i = 0; i < 256; i++) sine[i] = Math.round(32767 * Math.sin(2 * Math.PI * i / 256));
+function fftBands(win) {                                      // fft_spectrum(): Hann window, 256-point FFT, band means
+  const re = new Float64Array(256), im = new Float64Array(256);
+  for (let i = 0; i < 256; i++) { const hann = (32767 - sine[(i + 64) & 255]) >> 1; re[i] = (win[i] * hann) >> 15; }
+  for (let i = 1, j = 0; i < 256; i++) {
+    let bit = 128; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= 256; len <<= 1) {
+    const half = len / 2, step = 256 / len;
+    for (let i = 0; i < 256; i += len) for (let k = 0; k < half; k++) {
+      const c = sine[(k * step + 64) & 255] / 32768, s = sine[k * step] / 32768;
+      const a = i + k, b = a + half;
+      const vr = re[b] * c + im[b] * s, vi = im[b] * c - re[b] * s;
+      re[b] = re[a] - vr; im[b] = im[a] - vi; re[a] += vr; im[a] += vi;
+    }
+  }
+  const mag = k => Math.abs(re[k]) + Math.abs(im[k]);
+  const band = (a, b) => { let s = 0; for (let k = a; k < b; k++) s += mag(k); return Math.floor(s / (b - a)); };
+  return { three: [band(1, 4), band(4, 32), band(32, 128)], spec: SPEC_EDGE.slice(0, 16).map((e, i) => band(e, SPEC_EDGE[i + 1])) };
+}
+
+const board = {
+  gain: 25, rms: 0, loud: 0, pulse: 0, bands: [0, 0, 0], spec: new Array(16).fill(0), beats: 0,
+  peak: 0, bpeak: [0, 0, 0], speak: new Array(16).fill(0), avg: 0, floorQ: 0, hold: 0, nblock: 0, win: new Int32Array(256),
+  block(raw24) {                                              // mic.c block()
+    let sum = 0; for (let i = 0; i < N; i++) sum += raw24[i];
+    const mean = Math.trunc(sum / N);
+    let acc = 0; for (let i = 0; i < N; i++) { const s = raw24[i] - mean; acc += s * s; }
+    this.rms = Math.floor(Math.sqrt(Math.floor(acc / N))) >>> 8;
+    const x = this.rms * this.gain, xq = x * 256;
+    if (xq < this.floorQ) this.floorQ -= (this.floorQ - xq) >>> 4; else this.floorQ += Math.floor((xq - this.floorQ) / 512);
+    const fl = this.floorQ >>> 8;
+    const sig = x > fl * 2 ? x - fl * 2 : 0;
+    this.peak = sig > this.peak ? sig : this.peak - (this.peak >>> PEAK_DECAY);
+    const ref = this.peak > fl * 2 + 64 ? this.peak : fl * 2 + 64;
+    let l = Math.floor(sig * 255 / ref); if (l > 255) l = 255;
+    this.loud = l > this.loud ? l : this.loud - ((this.loud - l + 7) >> 3);
+    this.avg += Math.trunc((sig - this.avg) / 128);
+    if (this.hold) this.hold--;
+    let beat = false;
+    if (!this.hold && sig > BEAT_MIN && sig * 100 > this.avg * BEAT_RATIO) { this.pulse = 255; this.hold = BEAT_HOLD; this.beats++; beat = true; }
+    else this.pulse -= (this.pulse + 15) >> 4;
+    this.win.copyWithin(0, 128);
+    for (let i = 0; i < 128; i++) this.win[128 + i] = Math.trunc(((raw24[2 * i] >> 8) + (raw24[2 * i + 1] >> 8)) / 2);
+    if (++this.nblock % 2 === 0) {
+      const f = fftBands(this.win);
+      // Each band against its own recent peak, but never below 1/8 of the loudest band's peak (so quiet bands stay
+      // quiet next to loud ones) or 1/8 of FULL (so a silent room stays dark): mic.c BAND_REL / BAND_FLOOR.
+      const norm = (vals, peaks, out) => {
+        let top = 0;
+        for (let k = 0; k < vals.length; k++) { const b = (vals[k] >>> 5) * this.gain; peaks[k] = b > peaks[k] ? b : peaks[k] - (peaks[k] >>> 7); top = Math.max(top, peaks[k]); }
+        for (let k = 0; k < vals.length; k++) { const b = (vals[k] >>> 5) * this.gain; out[k] = Math.min(255, Math.floor(b * 255 / Math.max(peaks[k], Math.floor(top / 8), FULL >> 3))); }
+      };
+      norm(f.three, this.bpeak, this.bands);
+      norm(f.spec, this.speak, this.spec);
+    }
+    return beat;
+  },
+  db() { const r = this.rms / 32768; return r > 0 ? Math.max(30, 120 + 20 * Math.log10(r * 1.4142)) : 30; },
+};
+
+// ---- fx.c and the sound styles of leds.c ---------------------------------------------------------------------
+function hsv(h, v = 255) {
+  h &= 255; const region = Math.floor(h / 43), rem = (h - region * 43) * 6, q = 255 - rem, t = rem;
+  const c = [[255, t, 0], [q, 255, 0], [0, 255, t], [0, q, 255], [t, 0, 255], [255, 0, q]][Math.min(region, 5)];
+  return c.map(x => Math.floor(x * v / 255));
+}
+const gam = x => Math.floor(x * x / 255);
+const fx = {
+  react: 60, smLoud: 0, smBands: [0, 0, 0], smSpec: new Array(16).fill(0), lastBeats: 0,
+  rings: Array.from({ length: 8 }, () => ({ pos: 0, amp: 0, hue: 0 })), hist: [], flowAcc: 0, peakQ: 0, peakHold: 0,
+  follow(v, x, k) { const t = x * 256; return t >= v ? t : t + Math.floor((v - t) * k / 65536); },
+  hue() { const b = this.smBands[0] >> 8, m = this.smBands[1] >> 8, t = this.smBands[2] >> 8, s = b + m + t; return s ? Math.floor((m * 85 + t * 170) / s) : 0; },
+  render(kind, a, n, dt, base) {
+    dt = Math.min(dt, 200);
+    const tau = 1000 * Math.pow(0.04, (this.react - 1) / 99), k = Math.floor(65536 * Math.exp(-dt / tau));
+    this.smLoud = this.follow(this.smLoud, a.loud, k);
+    for (let i = 0; i < 3; i++) this.smBands[i] = this.follow(this.smBands[i], a.bands[i], k);
+    for (let i = 0; i < 16; i++) this.smSpec[i] = this.follow(this.smSpec[i], a.spec[i], k);
+    const out = Array.from({ length: n }, () => [0, 0, 0]);
+    const half = Math.max(1, n >> 1);
+    if (kind === 'eq') for (let i = 0; i < n; i++) { const b = Math.floor(i * 16 / n); out[i] = hsv(Math.floor(b * 240 / 16), gam(this.smSpec[b] >> 8)); }
+    else if (kind === 'chroma') { const c = [gam(this.smBands[0] >> 8), gam(this.smBands[1] >> 8), gam(this.smBands[2] >> 8)]; for (let i = 0; i < n; i++) out[i] = c.slice(); }
+    else if (kind === 'mirror') {
+      const h2 = (n + 1) >> 1, litQ = Math.floor(this.smLoud * h2 / 255);
+      if (litQ >= this.peakQ) { this.peakQ = litQ; this.peakHold = 400; }
+      else if (this.peakHold > 0) this.peakHold -= dt;
+      else this.peakQ = Math.max(litQ, this.peakQ - Math.floor(h2 * 256 * dt / 1000));
+      const lit = litQ >> 8, pk = this.peakQ >> 8;
+      for (let d = 0; d < h2; d++) {
+        const c = d < lit ? hsv(85 - Math.floor(d * 85 / h2)) : d === pk && pk > 0 ? [200, 200, 200] : [0, 0, 0];
+        const i1 = (n >> 1) + d, i2 = ((n - 1) >> 1) - d;
+        if (i1 < n) out[i1] = c; if (i2 >= 0) out[i2] = c.slice();
+      }
+    } else if (kind === 'ripple') {
+      const nb = a.beats - this.lastBeats;
+      for (let b = 0; b < nb && b < 2; b++) {
+        let o = 0; for (let r = 1; r < 8; r++) if (this.rings[r].amp < this.rings[o].amp) o = r;
+        this.rings[o] = { pos: 0, amp: 160 + Math.floor((this.smLoud >> 8) * 95 / 255), hue: this.hue() + b * 40 };
+      }
+      const speed = Math.floor(half * 256 * 10 / 6), width = Math.floor(n / 24) + 2, bl = Math.floor((this.smLoud >> 8) / 6);
+      for (let i = 0; i < n; i++) out[i] = base.map(c => Math.floor(c * bl / 255));
+      for (const r of this.rings) {
+        if (!r.amp) continue;
+        r.pos += Math.floor(speed * dt / 1000);
+        const pos = r.pos >> 8;
+        if (pos > half + width) { r.amp = 0; continue; }
+        const amp = Math.floor(r.amp * (half + width - pos) / (half + width));
+        for (let d = pos - width; d <= pos + width; d++) {
+          if (d < 0 || d > half) continue;
+          const c = hsv(r.hue, gam(Math.floor(amp * (width - Math.abs(d - pos) + 1) / (width + 1))));
+          const i1 = (n >> 1) + d, i2 = ((n - 1) >> 1) - d;
+          for (const i of (i2 !== i1 ? [i1, i2] : [i1])) if (i >= 0 && i < n) out[i] = out[i].map((v, ch) => Math.min(255, v + c[ch]));
+        }
+      }
+    } else if (kind === 'flow') {
+      if (this.hist.length !== n) this.hist = Array.from({ length: n }, () => [0, 0, 0]);
+      this.flowAcc += Math.floor(Math.max(30, n >> 1) * dt * 256 / 1000);
+      const step = Math.min(n, this.flowAcc >> 8); this.flowAcc &= 255;
+      const c = hsv(this.hue(), gam(this.smLoud >> 8));
+      if (step) { this.hist.splice(n - step, step); for (let i = 0; i < step; i++) this.hist.unshift(c.slice()); }
+      else this.hist[0] = c;
+      for (let i = 0; i < n; i++) out[i] = this.hist[i];
+    }
+    this.lastBeats = a.beats;
+    return out;
+  },
+};
+// The styles that were already on the board, for comparison (leds.c render() and main.c frame()).
+function classic(kind, a, n, base) {
+  const out = Array.from({ length: n }, () => [0, 0, 0]);
+  let lvl = 255;
+  if (kind === 'spectrum') for (let i = 0; i < n; i++) { const k = Math.floor(i * 3 / n), st = Math.floor(k * n / 3); if ((i - st) * 255 < a.bands[k] * (Math.floor((k + 1) * n / 3) - st)) out[i][k] = 255; }
+  else if (kind === 'vu') { const lit = Math.floor(n * a.loud / 255); for (let i = 0; i < lit; i++) out[i] = hsv(85 - Math.floor(i * 85 / n)); }
+  else { for (let i = 0; i < n; i++) out[i] = base.slice(); lvl = kind === 'sound' ? a.loud : 64 + Math.floor(191 * a.pulse / 255); }
+  return out.map(p => p.map(c => Math.floor(c * lvl / 255)));
+}
+
+const MODES = {
+  eq: '16-band spectrum: one zone per band from bass (red) to treble (pink), brightness follows each band.',
+  ripple: 'Each beat sends a ring outward from the centre, coloured by where the sound sits (bass red, treble blue).',
+  mirror: 'Level meter growing from the centre both ways, with a peak dot that holds and then falls.',
+  chroma: 'The whole strip takes the colour of the sound: bass red, mid green, treble blue, mixed live.',
+  flow: 'A waterfall: the colour and loudness of the sound enter at the start and scroll along the strip.',
+  spectrum: 'Existing style: three bars, bass, mid and treble.',
+  vu: 'Existing style: lit length follows the loudness, green to red.',
+  pulse: 'Existing style: the rgb colour flashes on each beat.',
+  sound: 'Existing style: the rgb colour, brightness follows the loudness.',
+};
+
+// ---- Test signals: generated in the audio thread so "Hear it" plays exactly what the board hears --------------
+const WORKLET = `
+function makeGen(R) {
+  let n = 0, ph = 0, bassPh = 0, lp = 0, b = [0,0,0,0,0,0,0], lastNoise = 0, f1 = [0,0], f2 = [0,0], vowel = null, sylEnd = 0, sylNext = 0;
+  const beat = Math.round(R * 60 / 120), noise = () => Math.random() * 2 - 1;
+  const reson = (st, x, f, r) => { const w = 2 * Math.PI * f / R, y = x * (1 - r) + 2 * r * Math.cos(w) * st[0] - r * r * st[1]; st[1] = st[0]; st[0] = y; return y; };
+  return (kind, onsets) => {
+    const t = n / R; let v = 0;
+    if (kind === 'music' || kind === 'kick') {
+      const bp = n % beat, bi = Math.floor(n / beat);
+      if (bp === 0) onsets.push(n);
+      const f = 45 + 90 * Math.exp(-bp / (0.03 * R)); ph += 2 * Math.PI * f / R;
+      v += Math.sin(ph) * Math.exp(-bp / (0.18 * R));
+      if (kind === 'music') {
+        if (bi % 2 === 1) v += (noise() * 0.5 + Math.sin(2 * Math.PI * 185 * bp / R) * 0.3) * Math.exp(-bp / (0.08 * R));
+        const e8 = n % (beat >> 1), wn = noise(); v += (wn - lastNoise) * 0.18 * Math.exp(-e8 / (0.015 * R)); lastNoise = wn;
+        const bf = [55, 55, 65.41, 49][Math.floor(bi / 4) % 4]; bassPh = (bassPh + bf / R) % 1;
+        lp += 0.08 * ((bassPh * 2 - 1) - lp); v += lp * 0.35 * (0.6 + 0.4 * Math.exp(-bp / (0.25 * R)));
+        v += 0.035 * (Math.sin(2 * Math.PI * 220 * t) + Math.sin(2 * Math.PI * 277.2 * t) + Math.sin(2 * Math.PI * 329.6 * t));
+      }
+    } else if (kind === 'sweep') {
+      v = Math.sin(2 * Math.PI * 50 * 8 / Math.log(160) * (Math.pow(160, (t % 8) / 8) - 1));
+    } else if (kind === 'pink') {
+      const w = noise();
+      b[0] = 0.99886 * b[0] + w * 0.0555179; b[1] = 0.99332 * b[1] + w * 0.0750759; b[2] = 0.96900 * b[2] + w * 0.1538520;
+      b[3] = 0.86650 * b[3] + w * 0.3104856; b[4] = 0.55000 * b[4] + w * 0.5329522; b[5] = -0.7616 * b[5] - w * 0.0168980;
+      v = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + w * 0.5362; b[6] = w * 0.115926;
+    } else if (kind === 'speech') {
+      if (n >= sylNext) { const len = 0.12 + Math.random() * 0.15; sylEnd = n + len * R; sylNext = sylEnd + (Math.random() < 0.25 ? 0.35 : 0.06) * R; vowel = [[700, 1200], [500, 1800], [300, 2300], [600, 1000], [400, 2000]][Math.floor(Math.random() * 5)]; onsets.push(n); }
+      if (n < sylEnd) {
+        const f0 = 120 + 20 * Math.sin(t * 3), g = ((t * f0) % 1) * 2 - 1, e = Math.min(1, (sylEnd - n) / (0.03 * R));
+        v = (reson(f1, g, vowel[0], 0.985) * 0.6 + reson(f2, g, vowel[1], 0.97) * 0.4) * e;
+      }
+    }
+    n++;
+    return v;
+  };
+}
+class Src extends AudioWorkletProcessor {
+  constructor() {
+    super(); this.kind = 'music'; this.play = 0; this.gen = makeGen(sampleRate); this.scale = 1; this.calibrate();
+    this.port.onmessage = e => { if (e.data.kind && e.data.kind !== this.kind) { this.kind = e.data.kind; this.calibrate(); } if (e.data.play !== undefined) this.play = e.data.play; };
+  }
+  calibrate() {                                    // unit RMS over 4 s, so the level slider is the long-term SPL
+    if (this.kind === 'input' || this.kind === 'silence') { this.scale = this.kind === 'input' ? 10 : 0; return; }
+    const g = makeGen(sampleRate), o = []; let acc = 0, m = sampleRate * 4;
+    for (let i = 0; i < m; i++) { const v = g(this.kind, o); acc += v * v; o.length = 0; }
+    this.scale = 1 / Math.sqrt(acc / m);
+  }
+  process(inputs, outputs) {
+    const out = outputs[0][0], inp = inputs[0] && inputs[0][0], s = new Float32Array(out.length), on = [];
+    for (let i = 0; i < out.length; i++) {
+      const before = on.length;
+      const v = this.kind === 'input' ? (inp ? inp[i] : 0) : this.kind === 'silence' ? 0 : this.gen(this.kind, on);
+      if (on.length > before) on[on.length - 1] = i;            // onsets as positions in this block
+      s[i] = v * this.scale;
+      out[i] = this.kind === 'input' ? 0 : s[i] * 0.1 * this.play;
+    }
+    this.port.postMessage({ s, on }, [s.buffer]);
+    return true;
+  }
+}
+registerProcessor('ledify-src', Src);
+`;
+
+// ---- Wiring ------------------------------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const cv = $('strip'), cx = cv.getContext('2d'), sc = $('spec'), sx = sc.getContext('2d');
+const ui = { mode: 'ripple', source: 'music', layout: 'strip' };
+let actx, node, mediaSrc, fileEl, micStream;
+const SOURCES = { music: 'drum loop', kick: 'kick only', speech: 'speech', sweep: 'tone sweep', pink: 'pink noise', silence: 'silence', file: 'audio file', mic: "this device's mic" };
+function chips(el, items, get, set) {
+  el.innerHTML = '';
+  for (const [k, label] of Object.entries(items)) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = label;
+    b.onclick = () => { set(k); for (const c of el.children) c.setAttribute('aria-pressed', c === b); };
+    b.setAttribute('aria-pressed', get() === k); el.appendChild(b);
+  }
+}
+chips($('modes'), Object.fromEntries(Object.keys(MODES).map(k => [k, k])), () => ui.mode, k => { ui.mode = k; $('modeDesc').textContent = MODES[k]; });
+$('modeDesc').textContent = MODES[ui.mode];
+chips($('sources'), SOURCES, () => ui.source, k => setSource(k));
+chips($('layouts'), { strip: 'strip', ring: 'ring' }, () => ui.layout, k => { ui.layout = k; sizeCanvas(); });
+const bind = (id, fmt, on) => { const el = $(id), o = $(id + 'Out'), f = () => { if (o) o.textContent = fmt(+el.value); on && on(+el.value); }; el.oninput = f; f(); return el; };
+bind('level', v => v + ' dB');
+bind('play', v => v ? v + ' %' : 'off', v => node && node.port.postMessage({ play: v / 100 }));
+bind('gain', v => v, v => { board.gain = v; });
+bind('react', v => v, v => { fx.react = v; });
+bind('bright', v => v);
+bind('count', v => v, () => sizeCanvas());
+
+async function setSource(k) {
+  ui.source = k;
+  if (!actx) return;
+  if (mediaSrc) { try { mediaSrc.disconnect(); } catch (e) { /* gone */ } mediaSrc = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (fileEl) fileEl.pause();
+  if (k === 'mic') {
+    try { micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+    catch (e) { alert('Microphone: ' + e.message); return; }
+    mediaSrc = actx.createMediaStreamSource(micStream); mediaSrc.connect(node);
+  } else if (k === 'file') {
+    const f = $('file').files[0];
+    if (!f) { alert('Pick an audio file first, then press "audio file".'); return; }
+    if (!fileEl) { fileEl = new Audio(); fileEl.loop = true; fileEl.node = actx.createMediaElementSource(fileEl); }
+    fileEl.src = URL.createObjectURL(f); fileEl.node.connect(node); fileEl.node.connect(actx.destination); mediaSrc = fileEl.node; fileEl.play();
+  }
+  node.port.postMessage({ kind: k === 'mic' || k === 'file' ? 'input' : k });
+}
+$('file').onchange = () => { if ($('file').files[0]) { setSource('file'); for (const c of $('sources').children) c.setAttribute('aria-pressed', c.textContent === SOURCES.file); } };
+
+// ---- The simulated board's clock: 8 ms blocks in, frames out at the firmware's period ----------------------
+let rsPos = 0, rsLast = 0, inRate = 48000, blockBuf = new Int32Array(N), blockFill = 0, sampleClock = 0;
+let nextFrameAt = 0, lastFrameAt = 0, frame = [], framesDone = 0, fpsT = 0, fpsN = 0;
+const onsets = [], lats = [];
+let hits = 0, onsetsSeen = 0;
+const mic = makeMic();
+const wireMs = () => (+$('count').value * 30 + 280) / 1000;
+const periodMs = () => Math.max(SOUND_FRAME_MS, wireMs() + 2);   // main.c frame_period_us(): every style here uses the mic
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+function snapshot() { return { loud: board.loud, pulse: board.pulse, bands: board.bands.slice(), spec: board.spec.slice(), beats: board.beats }; }
+
+function onAudio({ s, on }) {
+  const hitAt = new Set(on);
+  const pa = 20e-6 * Math.pow(10, +$('level').value / 20);
+  for (let i = 0; i < s.length; i++) {
+    // linear resample to 32 kHz
+    const x = s[i];
+    if (hitAt.has(i)) onsets.push(sampleClock);                  // drum hit, on the board's 32 kHz sample clock
+    while (rsPos <= 1) {
+      const v = rsLast + (x - rsLast) * rsPos;
+      blockBuf[blockFill++] = mic(v * pa);
+      sampleClock++;
+      if (blockFill === N) { blockFill = 0; runBlock(); }
+      rsPos += inRate / FS;
+    }
+    rsPos -= 1; rsLast = x;
+  }
+}
+function runBlock() {
+  const nowMs = sampleClock * 1000 / FS;                        // this block is complete now
+  renderFramesBefore(nowMs);                                    // frames due earlier only saw the previous blocks
+  const beat = board.block(blockBuf);
+  if (beat) {                                                   // which drum hit set it off?
+    const det = sampleClock;
+    while (onsets.length && onsets[0] < det - FS * 0.06) { onsets.shift(); onsetsSeen++; }
+    if (onsets.length && onsets[0] <= det) {
+      const on = onsets.shift(); onsetsSeen++; hits++;
+      let f = nextFrameAt; while (f < nowMs) f += periodMs();     // the frame that first shows it
+      lats.push(f + wireMs() + DS.delay * 1000 - on * 1000 / FS);
+      if (lats.length > 20) lats.shift();
+    }
+  }
+  while (onsets.length && onsets[0] < sampleClock - FS * 0.06) { onsets.shift(); onsetsSeen++; }
+}
+function renderFramesBefore(nowMs) {
+  while (nextFrameAt < nowMs) {
+    const dt = lastFrameAt ? nextFrameAt - lastFrameAt : 16;
+    lastFrameAt = nextFrameAt;
+    const n = +$('count').value, base = hexRgb($('rgb').value);
+    frame = ['eq', 'ripple', 'mirror', 'chroma', 'flow'].includes(ui.mode) ? fx.render(ui.mode, snapshot(), n, dt, base) : classic(ui.mode, snapshot(), n, base);
+    framesDone++;
+    nextFrameAt += periodMs();
+    if (nextFrameAt < nowMs - 100) nextFrameAt = nowMs;
+  }
+}
+
+// ---- Drawing ---------------------------------------------------------------------------------------------
+function sizeCanvas() {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth;
+  const h = ui.layout === 'ring' ? Math.min(w, 420) : Math.max(60, Math.min(140, w / 8));
+  cv.style.height = h + 'px'; cv.width = w * dpr; cv.height = h * dpr; cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sc.width = sc.clientWidth * dpr; sc.height = 70 * dpr; sx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', sizeCanvas); sizeCanvas();
+function draw(ts) {
+  const w = cv.clientWidth, h = parseFloat(cv.style.height), n = +$('count').value, lvl = +$('bright').value;
+  cx.fillStyle = '#000'; cx.fillRect(0, 0, w, h);
+  cx.globalCompositeOperation = 'lighter';
+  const pos = i => {
+    if (ui.layout === 'ring') { const a = -Math.PI / 2 + i / n * 2 * Math.PI, r = Math.min(w, h) / 2 - 18; return [w / 2 + r * Math.cos(a), h / 2 + r * Math.sin(a)]; }
+    const pitch = (w - 20) / n; return [10 + pitch * (i + 0.5), h / 2];
+  };
+  const size = ui.layout === 'ring' ? Math.max(2, Math.min(8, (Math.min(w, h) * Math.PI) / n / 2.4)) : Math.max(1.5, Math.min(7, (w - 20) / n / 2.4));
+  for (let i = 0; i < n; i++) {
+    const p = frame[i]; if (!p) continue;
+    const r = p[0] * lvl / 255, g = p[1] * lvl / 255, b = p[2] * lvl / 255;
+    if (r + g + b < 3) { const [x, y] = pos(i); cx.fillStyle = '#16181d'; cx.beginPath(); cx.arc(x, y, size * 0.7, 0, 7); cx.fill(); continue; }
+    const [x, y] = pos(i), glow = cx.createRadialGradient(x, y, 0, x, y, size * 4);
+    glow.addColorStop(0, `rgba(${r | 0},${g | 0},${b | 0},0.55)`); glow.addColorStop(1, 'rgba(0,0,0,0)');
+    cx.fillStyle = glow; cx.beginPath(); cx.arc(x, y, size * 4, 0, 7); cx.fill();
+    cx.fillStyle = `rgb(${Math.min(255, r * 1.2 + 30) | 0},${Math.min(255, g * 1.2 + 30) | 0},${Math.min(255, b * 1.2 + 30) | 0})`;
+    cx.beginPath(); cx.arc(x, y, size, 0, 7); cx.fill();
+  }
+  cx.globalCompositeOperation = 'source-over';
+  // meters
+  const pct = v => (v * 100 / 255) + '%';
+  $('mLoud').style.width = pct(board.loud);
+  for (let k = 0; k < 3; k++) $('mB' + k).style.width = pct(board.bands[k]);
+  $('beat').className = 'dot' + (board.pulse > 128 ? ' on' : '');
+  $('beats').textContent = board.beats + ' beats';
+  const dbfs = board.rms > 0 ? 20 * Math.log10(board.rms / 32768 * 1.4142) : -120;
+  $('db').textContent = `${board.db().toFixed(0)} dB SPL · ${dbfs.toFixed(0)} dBFS`;
+  const sw = sc.clientWidth, bw = sw / 16;
+  sx.clearRect(0, 0, sw, 70);
+  for (let k = 0; k < 16; k++) { const v = board.spec[k] / 255; sx.fillStyle = `rgb(${hsv(Math.floor(k * 240 / 16)).join(',')})`; sx.fillRect(k * bw + 2, 70 - v * 66, bw - 4, v * 66); }
+  // speed
+  if (lats.length) { $('latBeat').textContent = (lats.reduce((a, b) => a + b, 0) / lats.length).toFixed(0); $('latMax').textContent = Math.max(...lats).toFixed(0); }
+  else { $('latBeat').textContent = $('latMax').textContent = '–'; }
+  if (ts - fpsT > 1000) { $('fps').textContent = ((framesDone - fpsN) * 1000 / (ts - fpsT || 1)).toFixed(0); fpsN = framesDone; fpsT = ts; }
+  $('hit').textContent = onsetsSeen ? Math.round(hits * 100 / onsetsSeen) + ' %' : '–';
+  requestAnimationFrame(draw);
+}
+
+$('start').onclick = async () => {
+  $('start').classList.add('hidden');
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  inRate = actx.sampleRate;
+  await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
+  node = new AudioWorkletNode(actx, 'ledify-src', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+  node.connect(actx.destination);
+  node.port.onmessage = e => onAudio(e.data);
+  node.port.postMessage({ play: +$('play').value / 100 });
+  await setSource(ui.source === 'file' || ui.source === 'mic' ? 'music' : ui.source);
+  requestAnimationFrame(draw);
+};
+</script>
+</body>
+</html>

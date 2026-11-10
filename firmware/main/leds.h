@@ -24,8 +24,12 @@ void leds_set_temp(uint8_t pos);                // temperature colour: 0 blue, 1
 
 // Colour sources. leds_frame() is the only way pixels go out, so every style passes the power cap. The setters
 // above only change state; whoever changes something draws the next frame.
-typedef enum { COLOR_SOLID, COLOR_RAINBOW, COLOR_TEMP, COLOR_SPECTRUM, COLOR_METER, COLOR_PALETTE, COLOR_COVER, COLOR_STREAM } leds_color_t;
-#define LED_COLORS "solid|rainbow|temp|spectrum|meter|palette|cover"
+// COLOR_EQ..COLOR_FLOW are the whole-strip sound styles in fx.c: they need the microphone and can't go in a segment.
+typedef enum { COLOR_SOLID, COLOR_RAINBOW, COLOR_TEMP, COLOR_SPECTRUM, COLOR_METER, COLOR_PALETTE, COLOR_COVER,
+               COLOR_EQ, COLOR_RIPPLE, COLOR_MIRROR, COLOR_CHROMA, COLOR_FLOW, COLOR_STREAM } leds_color_t;
+#define LED_COLORS "solid|rainbow|temp|spectrum|meter|palette|cover|eq|ripple|mirror|chroma|flow"
+#define LED_SEG_COLORS 7                         // the first 7 work in segments
+#define LED_IS_FX(c) ((c) >= COLOR_EQ && (c) <= COLOR_FLOW)
 #define LED_MAX_STOPS 16
 // Two gradients: slot 0 is the user's (the palette colour source), slot 1 the album cover's (cover), so one never
 // overwrites the other. pos = % along the strip per stop, NULL spreads them evenly.
@@ -39,6 +43,10 @@ void leds_set_droop(uint8_t pct);               // tail colour fix 0..100: cut r
 // bands: bass/mid/treble 0..255 for the spectrum bars.
 // instant: no transition (sound-reactive styles and LAN streams are already moving).
 void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3], bool instant);
+struct mic_snap;
+void leds_set_audio(const struct mic_snap *a);  // the sound the fx styles draw from; set before each leds_frame()
+void leds_set_react(uint8_t react);             // fx release speed 1..100, see fx_set_react()
+uint32_t leds_wire_us(void);                    // how long one frame takes on the wire at the current count
 const char *leds_color_name(leds_color_t c);
 bool leds_animated(leds_color_t c);             // the strip or a segment moves on its own (rainbow): redraw every frame
 

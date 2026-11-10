@@ -2,6 +2,7 @@
 #include "leds.h"
 #include "board.h"
 #include "led_strip.h"
+#include "fx.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -48,7 +49,9 @@ static bool settled = true;
 static int64_t last_us;
 typedef struct { uint16_t a, b; leds_color_t c; uint8_t r, g, bl; bool on; } seg_t;
 static seg_t segs[LED_MAX_SEGS];
-static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "stream"};
+static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "stream"};
+static mic_snap_t audio;
+static int64_t fx_us;
 static uint8_t stream_fb[MAX_LEDS][3];
 static int64_t stream_at;
 static uint8_t hue, temp_pos = 128, last_cap;
@@ -327,23 +330,32 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         hue++;
     }
     uint32_t sum = 0;
+    if (LED_IS_FX(c)) {                                          // whole-strip sound style: draws fb in one go
+        int64_t t = esp_timer_get_time();
+        uint32_t dt = fx_us ? (uint32_t)((t - fx_us) / 1000) : FRAME_MS;
+        fx_us = t;
+        uint8_t base[3] = {cur_r, cur_g, cur_b};
+        fx_render((fx_t)(c - COLOR_EQ), &audio, fb, count, dt, base);
+    }
     for (int i = 0; i < count; i++) {
         uint8_t *p = fb[i];
-        p[0] = p[1] = p[2] = 0;
         if (i >= lit) {
+            p[0] = p[1] = p[2] = 0;
             continue;
         }
-        if (c == COLOR_STREAM) {
+        const seg_t *s = c == COLOR_STREAM ? NULL : seg_at(i);
+        if (LED_IS_FX(c) && !s) {
+            // fb[i] already holds the style's pixel
+        } else if (c == COLOR_STREAM) {
             p[0] = stream_fb[i][0];
             p[1] = stream_fb[i][1];
             p[2] = stream_fb[i][2];
+        } else if (s) {
+            p[0] = p[1] = p[2] = 0;
+            render(s->c, i - s->a, s->b - s->a, s->r, s->g, s->bl, bands, p);
         } else {
-            const seg_t *s = seg_at(i);
-            if (s) {
-                render(s->c, i - s->a, s->b - s->a, s->r, s->g, s->bl, bands, p);
-            } else {
-                render(c, i, count, cur_r, cur_g, cur_b, bands, p);
-            }
+            p[0] = p[1] = p[2] = 0;
+            render(c, i, count, cur_r, cur_g, cur_b, bands, p);
         }
         sum += p[0] * LED_RED_MW + p[1] * LED_GREEN_MW + p[2] * LED_BLUE_MW;
     }
@@ -476,7 +488,7 @@ const char *leds_color_name(leds_color_t c)
 
 static bool moving(leds_color_t c)
 {
-    return c == COLOR_RAINBOW || (scroll && (c == COLOR_PALETTE || c == COLOR_COVER));
+    return c == COLOR_RAINBOW || LED_IS_FX(c) || (scroll && (c == COLOR_PALETTE || c == COLOR_COVER));
 }
 
 bool leds_animated(leds_color_t c)
@@ -509,7 +521,7 @@ bool leds_settled(void)
 
 bool leds_set_segment(int i, uint16_t a, uint16_t b, leds_color_t c, uint8_t r, uint8_t g, uint8_t bl)
 {
-    if (i < 0 || i >= LED_MAX_SEGS || a >= b || b > MAX_LEDS || c == COLOR_STREAM) {
+    if (i < 0 || i >= LED_MAX_SEGS || a >= b || b > MAX_LEDS || c >= LED_SEG_COLORS) {
         return false;
     }
     segs[i] = (seg_t){ .a = a, .b = b, .c = c, .r = r, .g = g, .bl = bl, .on = true };
@@ -569,7 +581,7 @@ void leds_load_segments(const char *str)
         if (sscanf(e, "%d:%d-%d:%11[^:]:%x", &i, &a, &b, name, &hex) != 5) {
             continue;
         }
-        for (int c = 0; c < COLOR_STREAM; c++) {
+        for (int c = 0; c < LED_SEG_COLORS; c++) {
             if (!strcmp(name, src_names[c])) {
                 leds_set_segment(i - 1, a, b, c, hex >> 16, hex >> 8, hex);
             }
@@ -592,4 +604,20 @@ void leds_stream_pixels(uint16_t first, const uint8_t *rgb, int npx)
 bool leds_stream_active(void)
 {
     return stream_at && esp_timer_get_time() - stream_at < STREAM_TIMEOUT_MS * 1000LL;
+}
+
+void leds_set_audio(const struct mic_snap *a)
+{
+    audio = *a;
+}
+
+void leds_set_react(uint8_t r)
+{
+    fx_set_react(r);
+}
+
+// 24 bits (32 for RGBW) at 1.25 us each, plus the 280 us reset gap the newer WS2812B revisions want.
+uint32_t leds_wire_us(void)
+{
+    return (uint32_t)count * (types[type_idx].white ? 40 : 30) + 280;
 }
