@@ -32,7 +32,37 @@ Then Wi-Fi. I take the board to different places so I added up to 5 fallback net
 
 And since I have more than one board now I wrote [`firmware/creds.py`](firmware/creds.py), which pulls a board's saved settings into a local creds.csv (which isnt in the repo) and pushes them onto another board so I dont have to type everything in again.
 
-# 10/2026 - Stencil, Hotplate and First Light
+# 10/15/2026 - PD Debugging and a Lot of Firmware
+
+So the board would sometimes die early in boot while it was negotiating PD, and I had no idea at which step. So I made the firmware keep a boot counter, the reset reason and the PD result in NVS, then a log of the last 4 boots, and then a log of every single handshake step as it happens. With that I made it fall back to a safe 5V boot after two early deaths, use the charger's 5V rating after a reject, and start PD 100 ms after boot instead of 2 s (with a `pddelay` setting to change it).
+
+Then I went through the panel twice, first onto Tailwind and then I rewrote it on SolidJS and Vite with optimistic controls so sliders dont jump back while the board answers. On the firmware side I added:
+
+- gradients with positioned stops (up to 16) and a droop setting that balances the warm far end of a strip thats only fed from one end
+- transitions, sleep and sunrise timers and schedules
+- zones
+- a local panel served by the board itself over mDNS and WebSocket, and setup over Web Bluetooth
+- DDP and E1.31 so other programs can stream pixels to it
+- album cover colours as their own gradient, stripes with a run length per colour, and scrolling gradients and stripes
+- a colombia gradient (with pure red because the flag red looks pink on leds lol)
+
+I also wrote down what I want for rev 2 in the [README](README.md): current sensing, a second data output, a 5.2V setting for long strips, power injection pads, a user button, and checking the mic port, since the first board's mic doesnt hear anything.
+
+# 10/2026 - Fixing the Short and First Light
+
+So I went back and found the short on one of the boards and fixed it, and then I wired it up to a strip on the VCC, SIG and GND pads and plugged in USB-C
+
+![image](assets/journal/board_wired.jpeg)
+
+and it lit up!!!
+
+![image](assets/journal/first_light_red.jpeg)
+
+![image](assets/journal/first_light_green.jpeg)
+
+This was also the first time I sat down with Claude to debug the boards. The board would sometimes die early in boot while it was talking PD to the charger, and my mac doesnt give a proper PD contract so I need a PD compliant charger to really test it (all the PD logging I added for this is in the 10/15 entry). The second board still had a short on 3V3, around 2.6 ohms, and the mic on the first board didnt hear anything at all even though it passed every electrical check, so I added reflowing it to the list.
+
+# 10/13/2026 8 PM - Stencil, Paste and Hotplate
 
 The boards came in!! in the end I didnt go with PCBA and stenciled them myself. I got the stencil out and taped a board down in a jig made out of PCB rulers and kapton tape so it couldnt move
 
@@ -68,33 +98,7 @@ and all three done
 
 ![image](assets/journal/three_boards.jpeg)
 
-Then I wired one up to a strip on the VCC, SIG and GND pads and plugged in USB-C
-
-![image](assets/journal/board_wired.jpeg)
-
-and it lit up!!!
-
-![image](assets/journal/first_light_red.jpeg)
-
-![image](assets/journal/first_light_green.jpeg)
-
-This was also the first time I sat down with Claude to debug the boards. The board would sometimes die early in boot while it was talking PD to the charger, and my mac doesnt give a proper PD contract so I need a PD compliant charger to really test it (all the PD logging I added for this is in the 10/15 entry). The second board had a short on 3V3, around 2.6 ohms, and the mic on the first board didnt hear anything at all even though it passed every electrical check, so I added reflowing it to the list.
-
-# 10/15/2026 - PD Debugging and a Lot of Firmware
-
-So the board would sometimes die early in boot while it was negotiating PD, and I had no idea at which step. So I made the firmware keep a boot counter, the reset reason and the PD result in NVS, then a log of the last 4 boots, and then a log of every single handshake step as it happens. With that I made it fall back to a safe 5V boot after two early deaths, use the charger's 5V rating after a reject, and start PD 100 ms after boot instead of 2 s (with a `pddelay` setting to change it).
-
-Then I went through the panel twice, first onto Tailwind and then I rewrote it on SolidJS and Vite with optimistic controls so sliders dont jump back while the board answers. On the firmware side I added:
-
-- gradients with positioned stops (up to 16) and a droop setting that balances the warm far end of a strip thats only fed from one end
-- transitions, sleep and sunrise timers and schedules
-- zones
-- a local panel served by the board itself over mDNS and WebSocket, and setup over Web Bluetooth
-- DDP and E1.31 so other programs can stream pixels to it
-- album cover colours as their own gradient, stripes with a run length per colour, and scrolling gradients and stripes
-- a colombia gradient (with pure red because the flag red looks pink on leds lol)
-
-I also wrote down what I want for rev 2 in the [README](README.md): current sensing, a second data output, a 5.2V setting for long strips, power injection pads, a user button, and checking the mic port, since the first board's mic doesnt hear anything.
+but none of them worked lol, something on the boards was shorted so that had to wait until I could fix it.
 
 # 9/30/2026 - Swapping the Mic and Final Files
 
