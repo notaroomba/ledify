@@ -137,7 +137,7 @@ int main(void)
     float off[3] = {0, 0, 0.02f};
     for (int k = 0; k < 1.2f * FUSION_HZ; k++) step(z, off);
     const float pa0 = 101325, PI = 3.14159265f, T = 0.6f;
-    fusion_baro(pa0, 0.05f);
+    fusion_baro(pa0 + 4, 0.05f);                     // a stale first reading (the old configuration's): ignored
     float worst_still = 0, worst_move = 0, truth = 0;
     int k = 0;
     for (float t = 0; t < 14; t = ++k * DT) {
@@ -156,6 +156,7 @@ int main(void)
         float lin[3] = {0, 0, a / 9.80665f + 0.02f};
         step(z, lin);
         if (k % 10 == 0) fusion_baro(pa0 - truth * 11.95f + 0.5f * gauss(), 0.05f);
+        if (t < 1.4f) assert(!m.have_height);     // still settling: no height yet
         float err = fabsf(m.height - truth);
         bool moving = u >= 0 && u < T + 1;
         if (moving) worst_move = fmaxf(worst_move, err); else worst_still = fmaxf(worst_still, err);

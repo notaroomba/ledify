@@ -474,8 +474,8 @@ static bool set_mode(const char *name)
 {
     int c = lookup(name, color_names, N_COLORS);
     if (c >= 0) {
-        if (c == COLOR_HEIGHT && color != COLOR_HEIGHT) {
-            motion_zero_height();                // the height style counts from where it was switched on
+        if (c == COLOR_HEIGHT) {
+            motion_zero_height();                // the height style counts from where it was switched on (or picked again)
         }
         color = c;
         sound_on = false;

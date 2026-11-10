@@ -28,6 +28,10 @@ static bool kick_armed = true;
 #define ALT_W 0.8f
 static float h_ref;                         // barometric altitude of height 0, m
 static bool h_have;
+static int h_warm;                          // barometer readings seen before height starts
+static float h_sum;
+#define H_SKIP 20                           // the first second after (re)configuring the BMP581 is not trusted
+#define H_AVG 10                            // then half a second averaged is height 0
 static float acc_off;                       // learnt vertical accelerometer offset, m/s^2
 
 static float dot(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -80,7 +84,9 @@ void fusion_reset(void)
     uint32_t kicks = s.kicks;
     memset(&s, 0, sizeof s);
     s.kicks = kicks;
-    h_have = false;
+    h_have = s.have_height = false;
+    h_warm = 0;
+    h_sum = 0;
     acc_off = 0;
     s.up[2] = 1;
     cal_n = cal_total = 0;
@@ -167,6 +173,7 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
         if (still_second) {
             start(cal_acc, mean, 1);
             acc_off = (rest_g - 1) * 9.80665f;   // at rest the vertical reading is exactly 1 g: the rest is offset
+            fusion_zero_height();                // and wherever it rests at boot is height 0
         } else if (cal_total > FUSION_CAL_GIVEUP_S * FUSION_HZ) {
             start(acc, NULL, 2);                 // never held still: go on, learn the bias at the next rest
         } else if (run_n == 0) {
@@ -237,10 +244,15 @@ void fusion_baro(float pa, float dt)
         return;
     }
     float alt = 44330.0f * (1 - powf(pa / 101325.0f, 0.190295f));
-    if (!h_have) {
-        h_ref = alt;
-        s.height = s.vz = 0;
-        h_have = s.have_height = true;
+    if (!h_have) {                               // settle, then average a reference rather than trust one reading
+        if (++h_warm > H_SKIP) {
+            h_sum += alt;
+        }
+        if (h_warm == H_SKIP + H_AVG) {
+            h_ref = h_sum / H_AVG;
+            s.height = s.vz = 0;
+            h_have = s.have_height = true;
+        }
         return;
     }
     dt = dt > 0.5f ? 0.5f : dt;
@@ -254,6 +266,7 @@ void fusion_zero_height(void)
 {
     h_ref += s.height;
     s.height = 0;
+    s.vz = 0;
 }
 
 void fusion_get(motion_snap_t *o)
