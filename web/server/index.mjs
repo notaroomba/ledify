@@ -38,7 +38,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------- stored state: one small JSON file on the Railway volume ----------
 const FILE = path.join(DATA, 'ledify.json');
-let db = { devices: {}, owners: {}, boards: {}, shares: {} };
+let db = { devices: {}, owners: {}, boards: {}, shares: {}, pw: {} };
 if (AUTH) {
   try { db = { ...db, ...JSON.parse(fs.readFileSync(FILE, 'utf8')) }; } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
@@ -113,12 +113,19 @@ async function putRole(rolename, acls) {
   ];
   if (ops.length) await run(ops);
 }
+// Setting a password also drops that user's connections, so it is only sent when it changed (the broker never shows
+// passwords back; db.pw keeps a hash of the last one set). Otherwise every panel restart kicked the boards.
 async function putClient(username, password, rolename) {
   const [c] = await run([{ command: 'getClient', username }]);
-  if (c.error) return run([{ command: 'createClient', username, password, roles: [{ rolename }] }]);
-  const ops = password ? [{ command: 'setClientPassword', username, password }] : [];
-  if (!(c.data.client.roles || []).some(r => r.rolename === rolename)) ops.push({ command: 'addClientRole', username, rolename });
-  if (ops.length) await run(ops);
+  const h = password && sha(username + '\n' + password);
+  if (c.error) {
+    await run([{ command: 'createClient', username, password, roles: [{ rolename }] }]);
+  } else {
+    const ops = password && db.pw[username] !== h ? [{ command: 'setClientPassword', username, password }] : [];
+    if (!(c.data.client.roles || []).some(r => r.rolename === rolename)) ops.push({ command: 'addClientRole', username, rolename });
+    if (ops.length) await run(ops);
+  }
+  if (h && !username.startsWith('web_') && !username.startsWith('owner_')) { db.pw[username] = h; save(); }   // browsers' logins are one-off
 }
 async function putBoard(id) {
   const b = db.boards[id];
