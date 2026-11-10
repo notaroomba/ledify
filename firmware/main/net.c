@@ -160,7 +160,9 @@ static void apply_wifi(int i)
     strncpy((char *)wc.sta.password, p, sizeof wc.sta.password - 1);
     wc.sta.threshold.authmode = p[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     wc.sta.pmf_cfg.capable = true;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    if (esp_wifi_set_config(WIFI_IF_STA, &wc) != ESP_OK) {   // Wi-Fi already stopped: the board is restarting
+        return;
+    }
     ESP_LOGI(TAG, "wifi: joining \"%s\"%s", s, i ? " (fallback)" : "");
 }
 
