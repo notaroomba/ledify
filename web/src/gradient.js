@@ -9,6 +9,7 @@ export const BUILT_IN_GRADIENTS = {
   candy: 'ff6ec7@0,ffffff@50,7afcff@100',
   'warm to cool': 'ffb46b@0,ffffff@50,b4d2ff@100',
   colombia: 'fcd116@0,fcd116@50,003893@50,003893@75,ff0000@75,ff0000@100',
+  lesbian: 'd52d00@0,d52d00@14,ef7627@14,ef7627@29,ff9a56@29,ff9a56@43,ffffff@43,ffffff@57,d162a4@57,d162a4@71,b55690@71,b55690@86,a30262@86,a30262@100',
 };
 export const parseStops = str => (str || '').split(',').map((s, i, a) => {
   const [c, p] = s.split('@');
