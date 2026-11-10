@@ -10,6 +10,6 @@ typedef struct {
 } cmd_t;
 
 // The setup window's one-time pairing code while the window is open (the button was held 3 s), else NULL. The board
-// reports it on ledify/ID/pair, which only the panel server may read, and gives it out over Bluetooth (and USB) only,
-// so whoever is in front of the board can link their browser to it from the hosted panel.
+// reports it on ledify/ID/pair, which only the panel server may read, and to its own WebSocket and Bluetooth, so
+// whoever is in front of the board can link their browser to it.
 const char *pair_code(void);

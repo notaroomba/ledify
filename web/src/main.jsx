@@ -11,7 +11,7 @@ import { act } from './actions';
 import { effectOf } from './effects';
 import { sp } from './spotify';
 import { Broker, Setup } from './dialogs';
-import { Access, LinkGate } from './access';
+import { Access, LinkGate, PairBanner } from './access';
 import { CommandBar, setCmdOpen } from './command';
 import { ColourLens, EffectsLens, GradientLens } from './lenses/look';
 import { SoundLens } from './lenses/sound';
@@ -114,6 +114,7 @@ function App() {
     </header>
 
     <main class="stage">
+      <PairBanner />
       <div class="alerts"><For each={alerts()}>{([k, text, to]) => <button type="button" class={'alert alert-' + k} disabled={!to} onClick={() => to && open(to)}>{text}</button>}</For></div>
       <Ring lens={lens} />
       <div class="sats"><For each={sat()}>{([u, v, to]) => <button type="button" class="sat" onClick={() => open(to)}><b>{v}</b><span>{u}</span></button>}</For></div>

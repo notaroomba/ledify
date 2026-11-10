@@ -1206,10 +1206,12 @@ static void handle(char *line)
         snprintf(p, sizeof p, "pair %s %s", net_id(), c ? c : "none");
         if (cmd_src == CMD_SRC_BLE) {
             ble_send(p);
+        } else if (cmd_src == CMD_SRC_WS) {
+            web_send_pair(net_id(), c ? c : "none");
         } else if (cmd_src == CMD_SRC_CONSOLE) {
             ESP_LOGI(TAG, "%s", p);
         } else {
-            reply("err pair: only over USB or Bluetooth");
+            reply("err pair: only over USB, Bluetooth or the board's own page");
         }
     } else if (!strcmp(tok[0], "help")) {
         reply("on off blink<n> rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
@@ -1231,6 +1233,7 @@ static void pair_open(void)
     pair_until = esp_timer_get_time() + PAIR_WINDOW_US;
     ESP_LOGI(TAG, "setup window open for 2 minutes");
     net_publish_pair();
+    web_send_pair(net_id(), pair_buf);
     char b[] = "blink 3";                                           // three blue flashes: the window is open
     cmd_src = CMD_SRC_OTHER;
     handle(b);
