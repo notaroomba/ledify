@@ -32,9 +32,9 @@ Then Wi-Fi. I take the board to different places so I added up to 5 fallback net
 
 And since I have more than one board now I wrote [`firmware/creds.py`](firmware/creds.py), which pulls a board's saved settings into a local creds.csv (which isnt in the repo) and pushes them onto another board so I dont have to type everything in again.
 
-# 10/2026 - Stencil, Paste and First Light
+# 10/2026 - Stencil, Hotplate and First Light
 
-The boards came in!! I got the stencil out and taped a board down in a jig made out of PCB rulers and kapton tape so it couldnt move
+The boards came in!! in the end I didnt go with PCBA and stenciled them myself. I got the stencil out and taped a board down in a jig made out of PCB rulers and kapton tape so it couldnt move
 
 ![image](assets/journal/stencil_jig.jpeg)
 
@@ -58,7 +58,7 @@ and checked every one under the microscope with the layout open in KiCad next to
 
 ![image](assets/journal/microscope_paste.jpeg)
 
-Heres an assembled board next to a bare one
+then I placed the parts and put them on the hotplate to reflow. Heres an assembled board next to a bare one
 
 ![image](assets/journal/assembled_and_bare.jpeg)
 
@@ -77,6 +77,8 @@ and it lit up!!!
 ![image](assets/journal/first_light_red.jpeg)
 
 ![image](assets/journal/first_light_green.jpeg)
+
+This was also the first time I sat down with Claude to debug the boards. The board would sometimes die early in boot while it was talking PD to the charger, and my mac doesnt give a proper PD contract so I need a PD compliant charger to really test it (all the PD logging I added for this is in the 10/15 entry). The second board had a short on 3V3, around 2.6 ohms, and the mic on the first board didnt hear anything at all even though it passed every electrical check, so I added reflowing it to the list.
 
 # 10/15/2026 - PD Debugging and a Lot of Firmware
 
