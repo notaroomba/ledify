@@ -260,6 +260,15 @@ void fusion_baro(float pa, float dt)
     }
     dt = dt > 0.5f ? 0.5f : dt;
     float err = (alt - h_ref) - s.height;
+    if (s.still && s.state == 1) {
+        // Resting (the IMU has seen no movement for a second): the board isn't changing height, so whatever the
+        // barometer says now is the air (a door, the heating, the weather, the sensor warming), not a climb. Let height
+        // 0 follow the pressure (over ~2 s, which also averages the noise) and keep the height as it is. On the board
+        // the pressure crept ~1.5 Pa a minute (13 cm/min) after a restart; this keeps that from adding up.
+        h_ref += err * (dt / (2 + dt));
+        s.vz = 0;
+        return;
+    }
     s.height += 3 * ALT_W * err * dt;            // poles all at -ALT_W: no overshoot
     s.vz += 3 * ALT_W * ALT_W * err * dt;
     acc_off -= ALT_W * ALT_W * ALT_W * err * dt;

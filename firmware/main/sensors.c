@@ -114,7 +114,7 @@ void sensors_init(i2c_master_bus_handle_t bus)
         vTaskDelay(pdMS_TO_TICKS(2));
         spi_rd(baro, 0x38, baro_dummy, b, 1);   // OSR_EFF: bit 7 says whether 20 Hz fits this oversampling
         ESP_LOGI(TAG, "barometer osr_eff 0x%02x (odr %s, effective osr p %dx t %dx)", b[0], b[0] & 0x80 ? "ok" : "TOO FAST",
-                 1 << (b[0] & 7), 1 << ((b[0] >> 3) & 7));
+                 1 << ((b[0] >> 3) & 7), 1 << (b[0] & 7));   // osr_t_eff in bits 2:0, osr_p_eff in 5:3
     }
     ESP_LOGI(TAG, "light sensor %d, imu %d, barometer %d", have_opt, have_imu, have_baro);
 }

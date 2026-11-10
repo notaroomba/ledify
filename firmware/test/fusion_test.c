@@ -165,6 +165,28 @@ int main(void)
            worst_move * 100, worst_still * 100, m.height * 100);
     assert(worst_move < 0.05f && worst_still < 0.03f && fabsf(m.height - 0.5f) < 0.02f);
 
+    // Pressure creeping 1.5 Pa a minute (as measured on the board after a restart) while it sits still for 3 minutes:
+    // height stays put; then a 30 cm lift still reads 30 cm.
+    float h0 = m.height, pa = pa0 - 0.5f * 11.95f, worst_creep = 0;
+    for (k = 0; k < 180 * FUSION_HZ; k++) {
+        step(z, off);
+        pa += 1.5f / 60 * DT;
+        if (k % 10 == 0) fusion_baro(pa + 0.5f * gauss(), 0.05f);
+        if (k > 2 * FUSION_HZ) worst_creep = fmaxf(worst_creep, fabsf(m.height - h0));
+    }
+    float before = m.height;
+    for (k = 0; k < 3 * FUSION_HZ; k++) {
+        float u = k * DT, a = 0, d = 0;
+        if (u < T) { a = 0.3f / 2 * (PI / T) * (PI / T) * cosf(PI * u / T); d = 0.3f * (1 - cosf(PI * u / T)) / 2; } else d = 0.3f;
+        float lin[3] = {0, 0, a / 9.80665f + 0.02f};
+        step(z, lin);
+        pa += 1.5f / 60 * DT;
+        if (k % 10 == 0) fusion_baro(pa - d * 11.95f + 0.5f * gauss(), 0.05f);
+    }
+    printf("pressure creeping 4.5 Pa over 3 min at rest: height moved at most %.1f cm (unfixed: ~38 cm); a 30 cm lift then reads %.1f cm\n",
+           worst_creep * 100, (m.height - before) * 100);
+    assert(worst_creep < 0.03f && fabsf(m.height - before - 0.3f) < 0.04f);
+
     puts("fusion ok");
     return 0;
 }
