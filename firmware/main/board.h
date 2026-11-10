@@ -37,7 +37,6 @@
 #define PD_WANT_MA   5000   // most current we ask for
 #define LED_POWER_SETTLE_MS 100     // buck soft start + pixel power-on reset before the first frame
 #define WIFI_NETS 6                 // the primary plus up to 5 fallbacks
-#define WIFI_FAILS_BEFORE_SWITCH 4  // failed joins in a row before trying the fallback network
 #define PD_START_DELAY_MS 100   // the source starts sending capabilities right away; answer them promptly
 #define PIN_BUTTON      9   // the BOOT button, free after reset: a short press toggles the output
 #define FADE_MS       300   // default transition: colour and brightness changes ease over about this long

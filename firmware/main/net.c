@@ -15,7 +15,6 @@
 //   ledify/ID/status       online / offline (retained, last will)
 #include <string.h>
 #include <stdio.h>
-#include <limits.h>
 #include <stdlib.h>
 #include "net.h"
 #include "esp_log.h"
@@ -39,9 +38,8 @@ static const char *TAG = "net";
 static QueueHandle_t cmd_q;
 static struct { char ssid[33], pass[65]; } nets[WIFI_NETS];   // 0 is the primary, the rest fallbacks (empty ssid = unused slot)
 static char mqtt_url[128], mqtt_user[48], mqtt_pass[64];
-static int which, fails;                  // which of nets[] we are on and failed joins in a row
+static int which;                         // which of nets[] we are on
 static int pin = -1;                      // "wifi2 try": the network to stay on until the next boot
-static bool scanning;
 static char id[16];                       // ledify_xxxxxx
 static char ip[16];
 static bool wifi_up, mqtt_up;
@@ -341,33 +339,14 @@ static void mqtt_start(void)
     esp_mqtt_client_start(mqtt);
 }
 
-// After a scan: go to the "wifi2 try" network, or the strongest saved network in range. None in range: stay put.
-static void scan_done(void)
+// Next saved network after which, wrapping round to the primary.
+static int next_net(void)
 {
-    int rssi[WIFI_NETS], best = -1;
-    for (int i = 0; i < WIFI_NETS; i++) {
-        rssi[i] = INT_MIN;
-    }
-    wifi_ap_record_t ap;
-    while (esp_wifi_scan_get_ap_record(&ap) == ESP_OK) {     // one at a time, a campus has far too many APs for a fixed array
-        for (int i = 0; i < WIFI_NETS; i++) {
-            if (nets[i].ssid[0] && ap.rssi > rssi[i] && !strcmp((char *)ap.ssid, nets[i].ssid)) {
-                rssi[i] = ap.rssi;
-            }
-        }
-    }
-    esp_wifi_clear_ap_list();
-    for (int i = 0; i < WIFI_NETS; i++) {
-        if (rssi[i] != INT_MIN) {
-            ESP_LOGI(TAG, "wifi: scan sees \"%s\" at %d dBm", nets[i].ssid, rssi[i]);
-            best = best < 0 || rssi[i] > rssi[best] ? i : best;
-        }
-    }
-    int to = pin >= 0 ? pin : best;
-    if (to >= 0 && to != which) {
-        which = to;
-        apply_wifi(which);
-    }
+    int i = which;
+    do {
+        i = (i + 1) % WIFI_NETS;
+    } while (!nets[i].ssid[0]);
+    return i;
 }
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t event_id, void *data)
@@ -377,30 +356,16 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t event_id, void 
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_up = false;
         ESP_LOGW(TAG, "wifi \"%s\" disconnected, reason %d", nets[which].ssid, ((wifi_event_sta_disconnected_t *)data)->reason);
-        if (scanning) {
-            return;
+        int to = pin >= 0 ? pin : next_net();   // one attempt per saved network, then round again
+        if (to != which) {
+            which = to;
+            apply_wifi(which);
         }
-        bool any = false;
-        for (int i = 0; i < WIFI_NETS; i++) {
-            any |= i != which && nets[i].ssid[0];
-        }
-        if (pin >= 0 ? which != pin : any && ++fails >= WIFI_FAILS_BEFORE_SWITCH) {   // another saved network may be the one in range
-            fails = 0;
-            scanning = esp_wifi_scan_start(NULL, false) == ESP_OK;
-            if (scanning) {
-                return;                              // SCAN_DONE picks the network and connects
-            }
-        }
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE && scanning) {
-        scanning = false;
-        scan_done();
         esp_wifi_connect();
     } else if (base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(ip, sizeof ip, IPSTR, IP2STR(&e->ip_info.ip));
         wifi_up = true;
-        fails = 0;
         ESP_LOGI(TAG, "wifi connected, ip %s", ip);
         mqtt_start();
         sched_on_ip();
