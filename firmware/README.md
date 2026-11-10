@@ -17,6 +17,7 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/board.h` | Pin map and tunables (pixel limits, frame rate, power budget, PD voltage, LED power settle time) |
 | `partitions.csv` | 16 MB flash: 24 KB NVS for settings, two 4 MB app slots for OTA |
 | `creds.example.csv` | Template for the NVS settings image (Wi-Fi, broker, strip, lighting tunables) |
+| `creds.py` | `pull` a board's settings into the local `creds.csv`, `push` them onto another board |
 
 ## Build and flash
 
@@ -212,7 +213,7 @@ or attach `ledify.bin` to a GitHub release and use its `https://github.com/.../r
 
 ## Wi-Fi, MQTT and Home Assistant
 
-Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `ssid2`, `pass2`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`, and the tunables `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
+Settings live in the NVS partition (namespace `cfg`): `ssid`, `pass`, `ssid2`, `pass2`, `mqtt_url`, `mqtt_user`, `mqtt_pass`, `count`, `type`, and the tunables `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`. Nothing secret is in the code. Set them with the `wifi` and `mqtt` commands, or build an NVS image from `creds.example.csv` (copy it outside the repo first) and flash it to `0x9000`; the comments in that file have the two commands. To copy one board's settings to another, `python creds.py pull` saves the plugged-in board's settings to `creds.csv` (gitignored, stays on this machine) and `python creds.py push` writes them to the next board. `mqtt://` and `mqtts://` (certificate bundle) URLs both work.
 
 The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3ed08`.
 
