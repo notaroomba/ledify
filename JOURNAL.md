@@ -30,11 +30,15 @@ The second board also had a solder bridge on L2 which I cleared, and it doesnt g
 
 Then Wi-Fi. I take the board to different places so I added up to 5 fallback networks (`wifi2`), and it tries each saved network once in turn and loops back to the first one instead of retrying the same network over and over. I also found that the board crashed on boot if no Wi-Fi was saved at all (lwIP was never started) and that it could panic if a disconnect came in while it was restarting, so I fixed both.
 
+![image](assets/journal/code_wifi_cycle.png)
+
 And since I have more than one board now I wrote [`firmware/creds.py`](firmware/creds.py), which pulls a board's saved settings into a local creds.csv (which isnt in the repo) and pushes them onto another board so I dont have to type everything in again.
 
 # 10/15/2026 - PD Debugging and a Lot of Firmware
 
 So the board would sometimes die early in boot while it was negotiating PD, and I had no idea at which step. So I made the firmware keep a boot counter, the reset reason and the PD result in NVS, then a log of the last 4 boots, and then a log of every single handshake step as it happens. With that I made it fall back to a safe 5V boot after two early deaths, use the charger's 5V rating after a reject, and start PD 100 ms after boot instead of 2 s (with a `pddelay` setting to change it).
+
+![image](assets/journal/code_boot_log.png)
 
 Then I went through the panel twice, first onto Tailwind and then I rewrote it on SolidJS and Vite with optimistic controls so sliders dont jump back while the board answers. On the firmware side I added:
 
@@ -51,6 +55,8 @@ I also wrote down what I want for rev 2 in the [README](README.md): current sens
 # 10/14/2026 9 PM - Writing the Firmware
 
 Then I started on the actual firmware. Its an ESP-IDF app that does the USB-C PD negotiation, reads all the sensors, and talks over BLE and Wi-Fi + MQTT so it shows up in Home Assistant, plus a serial console and support for different LED chip types. It goes up to 1000 pixels and caps the brightness to whatever the charger can actually give, and it takes the most powerful PD offer and renegotiates for 12V when I ask. Since 12V kills 5V pixels, `volt 12` has to be confirmed with `yes` everywhere, even from the panel.
+
+![image](assets/journal/code_volt12_guard.png)
 
 I put Home Assistant on Railway next to the MQTT broker and made the leds react to sound, temperature and light, so the colour, brightness and an overlay can all come from the mic or the sensors. I also added a fallback Wi-Fi network, OTA updates over Wi-Fi with rollback, and a web control panel on Railway with a live spectrum and an OTA button.
 
