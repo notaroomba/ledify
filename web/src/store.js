@@ -4,6 +4,7 @@
 import { createSignal, createEffect, createRoot } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import mqtt from 'mqtt';
+import { rgbHex } from './color';
 
 const CFG = window.LEDIFY_CONFIG || {};
 const unset = v => !v || v.startsWith('__');          // "__X__" means a local copy without that value injected
@@ -16,7 +17,7 @@ const ECHO_HOLD_MS = 1500;      // after the user touches a control, ignore the 
 
 export const [ui, setUi] = createStore({
   conn: 'connecting', current: null, devices: {},
-  live: { loud: 0, bands: [0, 0, 0], pulse: 0, db: null },
+  live: { loud: 0, bands: [0, 0, 0], pulse: 0, db: null, spec: null },
   toasts: [], brokerOpen: false, brokerMsg: '',
 });
 export const dev = () => ui.devices[ui.current] || {};
@@ -34,8 +35,18 @@ export function optimistic(key, source) {
   createEffect(() => { dev().seen; const s = source(); if (s !== undefined && settled(key)) setV(() => s); });
   return [v, nv => { touch(key); setV(() => nv); }];
 }
-// Shared across cards: the colour picker and the Spotify gradient also switch the effect.
-export const opt = createRoot(() => { const [mode, setMode] = optimistic('mode', () => state().mode); return { mode, setMode }; });
+// The look of the strip, shared by the ring, the lenses and the command bar: each is what the user last set until the
+// board has echoed it, then whatever the board says.
+export const opt = createRoot(() => {
+  const [mode, setMode] = optimistic('mode', () => state().mode);
+  const [color, setColor] = optimistic('color', () => { const c = (dev().light || {}).color; return c ? rgbHex(c.r, c.g, c.b) : undefined; });
+  const [level, setLevel] = optimistic('level', () => state().level);
+  const [power, setPower] = optimistic('power', () => state().power);
+  const [overlay, setOverlay] = optimistic('overlay', () => state().overlay);
+  const [scroll, setScroll] = optimistic('scroll', () => state().scroll);
+  const [stripe, setStripe] = optimistic('stripe', () => state().stripe === undefined ? undefined : String(state().stripe));
+  return { mode, setMode, color, setColor, level, setLevel, power, setPower, overlay, setOverlay, scroll, setScroll, stripe, setStripe };
+});
 
 export const [logText, setLogText] = createSignal('');
 export const log = line => setLogText(l => (new Date().toLocaleTimeString() + '  ' + line + '\n' + l).slice(0, 4000));
