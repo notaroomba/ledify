@@ -1,5 +1,7 @@
 # 11/09/2026 11 PM - Sound Modes, Beat Prediction and a New Panel
 
+_Time spent: 3h_
+
 Now that a mic actually works I wanted the leds to react to sound properly. I looked at doing voice commands on the board first but ESP-SR's command recognition only runs on the S3/P4 and not the C6, so I did audio reactive modes instead. There are 5 new styles (eq, ripple, mirror, chroma and flow) that run at 60 fps, a `react` setting for how hard they respond, and the board now splits the sound into a 16 band spectrum. I also made a little simulator in the browser ([`web/public/sim.html`](web/public/sim.html)) that models the ICS-43434 from its datasheet so I can try the modes without the board plugged in
 
 ![image](assets/journal/sound_simulator.jpeg)
@@ -24,6 +26,8 @@ So by the end of this I have 4 boards that are completely done and I got sound w
 
 # 11/09/2026 8 PM - Second Board, Mic and Wi-Fi Fallbacks
 
+_Time spent: 7h_
+
 So the mic on the first board never heard anything, it just sat flat around -67 dBFS no matter how loud it was. I reflowed it with hot air and it was the same, but then I tried the second board and its mic works!! So the footprint and the sound hole are fine and the first board's ICS-43434 is just damaged, probably from the two rounds of hot air, so it needs a new mic. I also added a `mic` command to the console that prints the level a few times a second which made testing way easier.
 
 The second board also had a solder bridge on L2 which I cleared, and it doesnt get a PD contract from my mac so I still have to try it on a real PD charger. Another board has trouble with its 3V3 rail that I haven't figured out yet.
@@ -35,6 +39,8 @@ Then Wi-Fi. I take the board to different places so I added up to 5 fallback net
 And since I have more than one board now I wrote [`firmware/creds.py`](firmware/creds.py), which pulls a board's saved settings into a local creds.csv (which isnt in the repo) and pushes them onto another board so I dont have to type everything in again.
 
 # 10/15/2026 - PD Debugging and a Lot of Firmware
+
+_Time spent: 4h 30m_
 
 So the board would sometimes die early in boot while it was negotiating PD, and I had no idea at which step. So I made the firmware keep a boot counter, the reset reason and the PD result in NVS, then a log of the last 4 boots, and then a log of every single handshake step as it happens. With that I made it fall back to a safe 5V boot after two early deaths, use the charger's 5V rating after a reject, and start PD 100 ms after boot instead of 2 s (with a `pddelay` setting to change it).
 
@@ -53,6 +59,8 @@ Then I went through the panel twice, first onto Tailwind and then I rewrote it o
 I also wrote down what I want for rev 2 in the [README](README.md): current sensing, a second data output, a 5.2V setting for long strips, power injection pads, a user button, and checking the mic port, since the first board's mic doesnt hear anything.
 
 # 10/14/2026 9 PM - Writing the Firmware
+
+_Time spent: 4h_
 
 Then I started on the actual firmware. Its an ESP-IDF app that does the USB-C PD negotiation, reads all the sensors, and talks over BLE and Wi-Fi + MQTT so it shows up in Home Assistant, plus a serial console and support for different LED chip types. It goes up to 1000 pixels and caps the brightness to whatever the charger can actually give, and it takes the most powerful PD offer and renegotiates for 12V when I ask. Since 12V kills 5V pixels, `volt 12` has to be confirmed with `yes` everywhere, even from the panel.
 
