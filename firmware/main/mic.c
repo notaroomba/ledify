@@ -6,6 +6,7 @@
 #include "mic.h"
 #include "board.h"
 #include "fft.h"
+#include "beat.h"
 #include "net.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
@@ -45,6 +46,9 @@ static volatile uint8_t spec[FFT_SPEC], fed_spec[FFT_SPEC];   // 16 log bands, e
 static uint32_t spec_peak[FFT_SPEC];
 static volatile uint32_t beats, fed_beats;                    // onsets so far: a style sees every beat even between frames
 static volatile int64_t block_at, fed_block_at;               // when the newest analysis was made, for the latency estimate
+static volatile bool predict = true;                         // beats come from the tempo tracker once it has locked
+static volatile int32_t lead_us = 12000;                     // fire predicted beats this early: the time to light the LEDs
+static uint16_t flux_prev[FFT_SPEC];                         // last frame's log band magnitudes, for the onset strength
 static volatile uint16_t meter_rms;   // loudest block since mic_meter() last read it
 
 static bool fed(void)
@@ -69,6 +73,23 @@ static void normalise(const uint32_t *mag, uint32_t *pk, volatile uint8_t *out, 
         uint32_t v = (uint64_t)b * 255 / ref;
         out[k] = v > 255 ? 255 : v;
     }
+}
+
+// Onset strength for the tempo tracker: how much each band rose since the last frame, on a log scale (so it doesn't
+// depend on the gain or the volume), half-wave rectified, with the four lowest bands (62-312 Hz, the kick) weighted 3x.
+static uint32_t onset_strength(const uint32_t *sp)
+{
+    uint32_t s = 0;
+    for (int k = 0; k < FFT_SPEC; k++) {
+        uint32_t x = sp[k] + 1;
+        int e = 31 - __builtin_clz(x);
+        uint16_t lg = e * 16 + (e >= 4 ? (x >> (e - 4)) & 15 : (x << (4 - e)) & 15);   // log2 in 1/16 steps
+        if (lg > flux_prev[k]) {
+            s += (lg - flux_prev[k]) * (k < 4 ? 3 : 1);
+        }
+        flux_prev[k] = lg;
+    }
+    return s;
 }
 
 // One 8 ms block: RMS -> gain -> peak follower -> loudness, onset detection, and the FFT bands every 4th block.
@@ -115,12 +136,21 @@ static void block(void)
     if (hold) {
         hold--;
     }
+    bool locked = predict && beat_locked();
     if (!hold && sig > BEAT_MIN && sig * 100 > (uint32_t)avg * BEAT_RATIO) {
-        pulse = 255;
         hold = BEAT_HOLD;
-        beats++;
+        beat_onset(now - 4000);                               // the block's middle: correct the predicted phase
+        if (!locked) {                                        // no steady tempo yet: light on the onset itself
+            pulse = 255;
+            beats++;
+        }
     } else {
         pulse -= (pulse + 15) >> 4;
+    }
+    // Predicted beats are asked for every block, locked or not, so the tracker can count the ones that land.
+    if (beat_due(now, lead_us) && predict) {
+        pulse = 255;
+        beats++;
     }
     memmove(win, win + N / 2, N / 2 * sizeof win[0]);
     for (int i = 0; i < N / 2; i++) {
@@ -139,6 +169,7 @@ static void block(void)
         fft_spectrum(win, m, sp);
         normalise(m, bpeak, bands, 3);
         normalise(sp, spec_peak, spec, FFT_SPEC);
+        beat_odf(onset_strength(sp), now);
     }
     block_at = now;
 }
@@ -186,7 +217,8 @@ bool mic_init(void)
         i2s_channel_read(rx, raw, sizeof raw, &n, 100);
     }
     gpio_set_pull_mode(PIN_MIC_SD, GPIO_PULLDOWN_ONLY);   // the datasheet wants 100k to ground on SD; the pad has none
-    xTaskCreate(mic_task, "mic", 4096, NULL, 4, NULL);
+    beat_reset();
+    xTaskCreate(mic_task, "mic", 6144, NULL, 4, NULL);         // 6 KB: the tempo estimate keeps ~1.6 KB on the stack
     return true;
 }
 
@@ -317,4 +349,29 @@ float mic_db_peak(void)
 void mic_listen(int secs)
 {
     listen_until = esp_timer_get_time() + (int64_t)secs * 1000000;
+}
+
+void mic_set_predict(bool on)
+{
+    predict = on;
+}
+
+void mic_set_lead(int32_t us)
+{
+    lead_us = us;
+}
+
+uint16_t mic_bpm(void)
+{
+    return beat_bpm();
+}
+
+uint8_t mic_lock(void)
+{
+    return predict ? beat_lock() : 0;
+}
+
+uint32_t mic_beats(void)
+{
+    return beats + fed_beats;
 }

@@ -60,6 +60,7 @@ static leds_color_t color;
 static overlay_t overlay;
 static bool sound_on, auto_on, dark;        // dark: under the night threshold
 static uint32_t lat_us;                     // smoothed estimate of sound-in to light-out, see frame()
+static uint32_t drawn_beats;                // the beat count the last frame showed: a new beat is drawn at once
 static int lux = -1;                        // latest reading, -1 without a sensor
 static float temp_in;                       // fed in over MQTT; the barometer's until then. ponytail: never expires, add a timeout if Home Assistant going away should fall back
 static bool have_temp_in;
@@ -168,9 +169,9 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
-static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60;
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60, predict = 1;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -186,6 +187,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"fade", &fade, 0, 5000},                // transition time in ms, 0 = instant
     {"scroll", &scroll, -200, 200},          // gradient/stripes travel, pixels per second; negative = the other way
     {"react", &react, 1, 100},               // how fast the sound styles fall back: release ~1 s at 1, 40 ms at 100
+    {"predict", &predict, 0, 1},             // 1 = once the tempo is steady, light beats on time from the tempo tracker
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -465,6 +467,7 @@ static bool set_setting(int i, int v)
     leds_set_fade(fade);
     leds_set_scroll(scroll);
     leds_set_react(react);
+    mic_set_predict(predict);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -537,6 +540,7 @@ static void frame(void)
     mic_snapshot(&snap);
     uint8_t *bands = snap.bands;
     leds_set_audio(&snap);
+    mic_set_lead((int32_t)leds_wire_us() + 1500);                // predicted beats fire this early: render + wire time
     if (snap.at) {                                               // audio-to-light delay: age of the analysis, plus half a
         int64_t age = esp_timer_get_time() - snap.at;            // block (the samples' mean age), plus the wire time
         uint32_t lat = (uint32_t)(age > 0 && age < 1000000 ? age : 0) + 4000 + leds_wire_us();
@@ -652,7 +656,8 @@ static void status(char *out, size_t n)
                       d.acc[0], d.acc[1], d.acc[2], d.gyr[0], d.gyr[1], d.gyr[2]);
     }
     if (have_mic) {
-        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f,\"db_peak\":%.0f,\"loud\":%d", mic_db(), mic_db_peak(), mic_loud());
+        w += snprintf(out + w, n - w, ",\"sound_db\":%.1f,\"db_peak\":%.0f,\"loud\":%d,\"bpm\":%u,\"lock\":%u", mic_db(), mic_db_peak(), mic_loud(),
+                      mic_bpm(), mic_lock());
     }
     snprintf(out + w, n - w, "}");
 }
@@ -1156,6 +1161,7 @@ void app_main(void)
     leds_set_fade(fade);
     leds_set_scroll(scroll);
     leds_set_react(react);
+    mic_set_predict(predict);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);
@@ -1305,10 +1311,11 @@ void app_main(void)
         if (now < live_until && now - last_live > LIVE_MS * 1000LL) {
             mic_snap_t a;
             mic_snapshot(&a);                                     // the mic, or what the panel feeds in
-            char live[224];
-            int w = snprintf(live, sizeof live, "{\"loud\":%d,\"bands\":[%d,%d,%d],\"pulse\":%d,\"db\":%.0f,\"cap\":%d,\"lat\":%lu,\"spec\":[",
+            char live[256];
+            int w = snprintf(live, sizeof live, "{\"loud\":%d,\"bands\":[%d,%d,%d],\"pulse\":%d,\"db\":%.0f,\"cap\":%d,\"lat\":%lu,"
+                             "\"bpm\":%u,\"lock\":%u,\"spec\":[",
                              a.loud, a.bands[0], a.bands[1], a.bands[2], a.pulse, have_mic ? mic_db() : 0.0f, leds_get_cap(),
-                             (unsigned long)(lat_us / 1000));
+                             (unsigned long)(lat_us / 1000), have_mic ? mic_bpm() : 0, have_mic ? mic_lock() : 0);
             for (int k = 0; k < MIC_SPEC; k++) {
                 w += snprintf(live + w, sizeof live - w, "%s%d", k ? "," : "", a.spec[k]);
             }
@@ -1326,7 +1333,10 @@ void app_main(void)
             publish();
             last_pub = now;
         }
-        if ((power || off_pending) && now - last_frame >= frame_period_us()) {
+        // A new beat is drawn at once rather than at the next 16 ms tick, as soon as the wire is free again.
+        bool beat_now = power && uses_mic() && mic_beats() != drawn_beats && now - last_frame >= (int64_t)leds_wire_us() + 1000;
+        if ((power || off_pending) && (beat_now || now - last_frame >= frame_period_us())) {
+            drawn_beats = mic_beats();
             frame();                                    // pixels only latch while powered, so still frames go out again once a second
             uint32_t us = esp_timer_get_time() - now;
             if (us > frame_max_us) {

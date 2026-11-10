@@ -65,6 +65,7 @@
       <h2>Sound in</h2>
       <div class="chips" id="sources"></div>
       <div class="row" style="margin-top:10px"><label for="level">Room level</label><input id="level" type="range" min="40" max="118" value="78"><output id="levelOut"></output></div>
+      <div class="row"><label for="tempo">Tempo</label><input id="tempo" type="range" min="70" max="175" value="124"><output id="tempoOut"></output></div>
       <div class="row"><label for="play">Hear it</label><input id="play" type="range" min="0" max="100" value="0"><output id="playOut"></output></div>
       <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><label for="file">Audio file</label><input id="file" type="file" accept="audio/*" style="min-width:0;max-width:100%"></div>
       <p class="muted">Room level is the sound pressure at the board, as the long-term RMS of the signal. For a file or this device's mic, it is the level that a −20 dBFS input stands for, so the dynamics of the recording come through. 60 dB is talking, 80 a loud speaker across the room, 100 a club.</p>
@@ -77,6 +78,7 @@
       <div class="row"><label for="bright">level</label><input id="bright" type="range" min="0" max="255" value="200"><output id="brightOut"></output></div>
       <div class="row"><label for="count">count</label><input id="count" type="range" min="10" max="600" value="120"><output id="countOut"></output></div>
       <div class="row"><label for="rgb">rgb</label><input id="rgb" type="color" value="#ff5a00"><output></output></div>
+      <div class="row" style="grid-template-columns:96px 1fr"><span>predict</span><div class="chips" id="predict"></div></div>
       <div class="chips" id="layouts" style="margin-top:8px"></div>
     </section>
 
@@ -96,12 +98,14 @@
     <section class="card">
       <h2>Speed: sound to light</h2>
       <div class="stats">
-        <div class="tile"><b id="latBeat">–</b><span>beat to LEDs, average (ms)</span></div>
+        <div class="tile"><b id="latBeat">–</b><span>LEDs vs the drum hit, average (ms, minus = early)</span></div>
         <div class="tile"><b id="latMax">–</b><span>worst of the last 20 (ms)</span></div>
+        <div class="tile"><b id="hit">–</b><span>drum hits lit</span></div>
+        <div class="tile"><b id="bpm">–</b><span>tempo found (BPM)</span></div>
+        <div class="tile"><b id="lock">–</b><span>periodicity, predicting once 25+ and the beats keep landing</span></div>
         <div class="tile"><b id="fps">–</b><span>frames per second</span></div>
-        <div class="tile"><b id="hit">–</b><span>drum hits caught</span></div>
       </div>
-      <p class="muted" style="margin-top:10px" id="latNote">Measured in simulated time from each drum hit in the test signals to the moment its frame has finished going down the wire. It includes the 8 ms sample block, the frame wait and the wire time; it leaves out Wi-Fi, which plays no part when the board's own mic drives the LEDs.</p>
+      <p class="muted" style="margin-top:10px" id="latNote">Measured in simulated time from each drum hit in the test signals to the moment its frame has finished going down the wire. Without prediction a beat can only be lit after it is heard: the 8 ms sample block, then the frame, then the wire. With prediction on, once the tempo is steady (lock 30 or more) the board fires each beat early by the time it takes to light the LEDs, so they land on the hit. Wi-Fi plays no part when the board's own mic drives the LEDs.</p>
     </section>
 
     <section class="card wide">
@@ -184,10 +188,98 @@ function fftBands(win) {                                      // fft_spectrum():
   return { three: [band(1, 4), band(4, 32), band(32, 128)], spec: SPEC_EDGE.slice(0, 16).map((e, i) => band(e, SPEC_EDGE[i + 1])) };
 }
 
+// ---- beat.c: tempo by autocorrelation, phase by a comb, nudged by each onset -------------------------------
+const tracker = {
+  H_LEN: 256, L_MIN: 20, L_MAX: 64, EST_EVERY: 32, LOCK_ON: 25, LOCK_OFF: 12, HITS_ON: 6, HITS_OFF: 4, F_US: 16000, WIN_US: 8000,
+  reset() {
+    this.h = new Uint16Array(256); this.hpos = 0; this.nfr = 0; this.lastT = 0; this.period = 0; this.cand = 0; this.agree = 0;
+    this.next = 0; this.fired = 0; this.firedHit = false; this.hitbits = 0; this.on = false; this.lock = 0; this.meanQ4 = 0;
+    this.prior = []; for (let l = 0; l <= 65; l++) { const o = l ? Math.log2(l / 31.25) / 0.7 : 9; this.prior[l] = Math.floor(256 * Math.exp(-0.5 * o * o)); }
+  },
+  at(a) { return this.h[((this.hpos - 1 - a) % 256 + 256) % 256]; },
+  estimate() {
+    const n = Math.min(this.nfr, 256); let sum = 0;
+    for (let a = 0; a < n; a++) sum += this.at(a);
+    const m = Math.trunc(sum / n), x = []; let a0 = 0;
+    for (let a = 0; a < n; a++) { x[a] = this.at(a) - m; a0 += x[a] * x[a]; }
+    if (a0 <= 0) { this.lock = 0; return; }
+    const ac = []; let best = 0, bestv = 0;
+    for (let l = this.L_MIN - 1; l <= this.L_MAX + 1; l++) {
+      let t = 0; for (let a = 0; a + l < n; a++) t += x[a] * x[a + l];
+      ac[l] = Math.trunc(t * n / (n - l));
+      if (l >= this.L_MIN && l <= this.L_MAX && ac[l] > 0 && Math.trunc(ac[l] / 256) * this.prior[l] > bestv) { bestv = Math.trunc(ac[l] / 256) * this.prior[l]; best = l; }
+    }
+    if (!best) { this.lock = 0; return; }
+    const y0 = ac[best - 1], y1 = ac[best], y2 = ac[best + 1], den = y0 - 2 * y1 + y2;
+    let frac = den < 0 ? Math.trunc((y0 - y2) * 128 / den) : 0; frac = Math.max(-128, Math.min(128, frac));
+    const np = Math.trunc((best * 256 + frac) * this.F_US / 256);
+    let rho = Math.trunc(y1 * 100 / a0);
+    if (!this.period) this.period = np;
+    else if (Math.abs(np - this.period) < this.period / 16) { this.period = Math.trunc((3 * this.period + np) / 4); this.agree = 0; }
+    else if (this.cand && Math.abs(np - this.cand) < this.cand / 16) { if (++this.agree >= 2) { this.period = np; this.next = 0; this.agree = 0; } }
+    else { this.cand = np; this.agree = 1; rho = Math.trunc(rho / 2); }
+    this.lock = rho <= 10 ? 0 : rho >= 60 ? 100 : (rho - 10) * 2;
+    const pf = Math.trunc(this.period * 256 / this.F_US), lf = pf >> 8; let bestp = 0, bests = 0;
+    for (let p = 0; p < lf; p++) {
+      let t = 0;
+      for (let k = 0; ; k++) { const i = p + ((k * pf + 128) >> 8); if (i + 1 >= n) break; const v = 2 * this.at(i) + (i ? this.at(i - 1) : 0) + this.at(i + 1); t += k < 4 ? 2 * v : v; }
+      if (t > bests) { bests = t; bestp = p; }
+    }
+    let beat = this.lastT - this.WIN_US - bestp * this.F_US;
+    while (beat <= this.lastT - this.period / 2) beat += this.period;
+    if (!this.next) { this.next = beat; return; }
+    let err = beat - this.next; const P = this.period;
+    err = (((err % P) + P + Math.trunc(P / 2)) % P) - Math.trunc(P / 2);
+    this.next += Math.trunc(this.on ? err / 4 : err / 2);
+  },
+  score(hit) {
+    this.hitbits = ((this.hitbits << 1) | (hit ? 1 : 0)) & 255;
+    let hits = 0; for (let b = this.hitbits; b; b >>= 1) hits += b & 1;
+    if (!this.on && this.lock >= this.LOCK_ON && hits >= this.HITS_ON) this.on = true;
+    else if (this.on && (this.lock < this.LOCK_OFF || hits < this.HITS_OFF || (this.hitbits & 7) === 0)) this.on = false;
+  },
+  odf(s, t) {
+    s = Math.min(65535, s); this.h[this.hpos] = s; this.hpos = (this.hpos + 1) % 256; this.nfr++; this.lastT = t;
+    this.meanQ4 += Math.trunc(((s << 4) - this.meanQ4) / 64);
+    if (this.fired && t >= this.fired + 3 * this.F_US) {
+      if (!this.firedHit) { let mx = 0; const a0 = Math.trunc((t - this.fired - 3 * this.F_US) / this.F_US); for (let a = a0; a <= a0 + 6 && a < 256; a++) mx = Math.max(mx, this.at(a)); this.firedHit = mx * 16 > this.meanQ4 * 2; }
+      this.score(this.firedHit); this.fired = 0;
+    }
+    if (this.nfr >= 128 && this.nfr % this.EST_EVERY === 0) this.estimate();
+  },
+  onset(t) {
+    if (!this.period || !this.next) return;
+    const near = this.fired && Math.abs(t - this.fired) < Math.abs(t - this.next) ? this.fired : this.next, err = t - near;
+    if (Math.abs(err) < this.period / 5) { this.next += Math.trunc(err / 3); this.period += Math.trunc(err / 16); if (near === this.fired) this.firedHit = true; }
+  },
+  locked() { return !!(this.period && this.next && this.on); },
+  due(now, lead) {
+    if (!this.period || !this.next) return false;
+    while (now > this.next + this.period) this.next += this.period;
+    if (now + lead + 4000 < this.next) return false;
+    if (this.fired) this.score(this.firedHit);
+    const on = this.locked();
+    this.fired = this.next; this.firedHit = false; this.next += this.period;
+    return on;
+  },
+  bpm() { return this.period ? Math.round(60e6 / this.period) : 0; },
+  shownLock() { return this.locked() ? this.lock : this.lock >> 1; },
+};
+tracker.reset();
+function onsetStrength(sp, prev) {                            // mic.c onset_strength(): log2 in 1/16 steps, rises only
+  let s = 0;
+  for (let k = 0; k < 16; k++) {
+    const x = sp[k] + 1, e = 31 - Math.clz32(x), lg = e * 16 + (e >= 4 ? (x >>> (e - 4)) & 15 : (x << (4 - e)) & 15);
+    if (lg > prev[k]) s += (lg - prev[k]) * (k < 4 ? 3 : 1);
+    prev[k] = lg;
+  }
+  return s;
+}
+
 const board = {
-  gain: 25, rms: 0, loud: 0, pulse: 0, bands: [0, 0, 0], spec: new Array(16).fill(0), beats: 0,
+  gain: 25, rms: 0, loud: 0, pulse: 0, bands: [0, 0, 0], spec: new Array(16).fill(0), beats: 0, predict: true, lead: 0, fluxPrev: new Array(16).fill(0),
   peak: 0, bpeak: [0, 0, 0], speak: new Array(16).fill(0), avg: 0, floorQ: 0, hold: 0, nblock: 0, win: new Int32Array(256),
-  block(raw24) {                                              // mic.c block()
+  block(raw24, now) {                                         // mic.c block(); now = block end in us
     let sum = 0; for (let i = 0; i < N; i++) sum += raw24[i];
     const mean = Math.trunc(sum / N);
     let acc = 0; for (let i = 0; i < N; i++) { const s = raw24[i] - mean; acc += s * s; }
@@ -203,8 +295,12 @@ const board = {
     this.avg += Math.trunc((sig - this.avg) / 128);
     if (this.hold) this.hold--;
     let beat = false;
-    if (!this.hold && sig > BEAT_MIN && sig * 100 > this.avg * BEAT_RATIO) { this.pulse = 255; this.hold = BEAT_HOLD; this.beats++; beat = true; }
-    else this.pulse -= (this.pulse + 15) >> 4;
+    const locked = this.predict && tracker.locked();
+    if (!this.hold && sig > BEAT_MIN && sig * 100 > this.avg * BEAT_RATIO) {
+      this.hold = BEAT_HOLD; tracker.onset(now - 4000);
+      if (!locked) { this.pulse = 255; this.beats++; beat = true; }
+    } else this.pulse -= (this.pulse + 15) >> 4;
+    if (tracker.due(now, this.lead) && this.predict) { this.pulse = 255; this.beats++; beat = 'p'; }
     this.win.copyWithin(0, 128);
     for (let i = 0; i < 128; i++) this.win[128 + i] = Math.trunc(((raw24[2 * i] >> 8) + (raw24[2 * i + 1] >> 8)) / 2);
     if (++this.nblock % 2 === 0) {
@@ -218,6 +314,7 @@ const board = {
       };
       norm(f.three, this.bpeak, this.bands);
       norm(f.spec, this.speak, this.spec);
+      tracker.odf(onsetStrength(f.spec, this.fluxPrev), now);
     }
     return beat;
   },
@@ -317,10 +414,10 @@ const MODES = {
 const WORKLET = `
 function makeGen(R) {
   let n = 0, ph = 0, bassPh = 0, lp = 0, b = [0,0,0,0,0,0,0], lastNoise = 0, f1 = [0,0], f2 = [0,0], vowel = null, sylEnd = 0, sylNext = 0;
-  const beat = Math.round(R * 60 / 120), noise = () => Math.random() * 2 - 1;
+  let bpm = 120; const noise = () => Math.random() * 2 - 1;
   const reson = (st, x, f, r) => { const w = 2 * Math.PI * f / R, y = x * (1 - r) + 2 * r * Math.cos(w) * st[0] - r * r * st[1]; st[1] = st[0]; st[0] = y; return y; };
-  return (kind, onsets) => {
-    const t = n / R; let v = 0;
+  const gen = (kind, onsets) => {
+    const t = n / R, beat = Math.round(R * 60 / bpm); let v = 0;
     if (kind === 'music' || kind === 'kick') {
       const bp = n % beat, bi = Math.floor(n / beat);
       if (bp === 0) onsets.push(n);
@@ -350,11 +447,13 @@ function makeGen(R) {
     n++;
     return v;
   };
+  gen.setBpm = v => { bpm = v; };
+  return gen;
 }
 class Src extends AudioWorkletProcessor {
   constructor() {
     super(); this.kind = 'music'; this.play = 0; this.gen = makeGen(sampleRate); this.scale = 1; this.calibrate();
-    this.port.onmessage = e => { if (e.data.kind && e.data.kind !== this.kind) { this.kind = e.data.kind; this.calibrate(); } if (e.data.play !== undefined) this.play = e.data.play; };
+    this.port.onmessage = e => { if (e.data.kind && e.data.kind !== this.kind) { this.kind = e.data.kind; this.calibrate(); } if (e.data.play !== undefined) this.play = e.data.play; if (e.data.bpm) this.gen.setBpm(e.data.bpm); };
   }
   calibrate() {                                    // unit RMS over 4 s, so the level slider is the long-term SPL
     if (this.kind === 'input' || this.kind === 'silence') { this.scale = this.kind === 'input' ? 10 : 0; return; }
@@ -401,11 +500,13 @@ bind('level', v => v + ' dB');
 bind('play', v => v ? v + ' %' : 'off', v => node && node.port.postMessage({ play: v / 100 }));
 bind('gain', v => v, v => { board.gain = v; });
 bind('react', v => v, v => { fx.react = v; });
+bind('tempo', v => v + ' BPM', v => { if (node) { resetStats(); node.port.postMessage({ bpm: v }); } });
+chips($('predict'), { on: 'on', off: 'off' }, () => 'on', k => { board.predict = k === 'on'; resetStats(); });
 bind('bright', v => v);
 bind('count', v => v, () => sizeCanvas());
 
 async function setSource(k) {
-  ui.source = k;
+  ui.source = k; resetStats();
   if (!actx) return;
   if (mediaSrc) { try { mediaSrc.disconnect(); } catch (e) { /* gone */ } mediaSrc = null; }
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
@@ -427,8 +528,9 @@ $('file').onchange = () => { if ($('file').files[0]) { setSource('file'); for (c
 // ---- The simulated board's clock: 8 ms blocks in, frames out at the firmware's period ----------------------
 let rsPos = 0, rsLast = 0, inRate = 48000, blockBuf = new Int32Array(N), blockFill = 0, sampleClock = 0;
 let nextFrameAt = 0, lastFrameAt = 0, frame = [], framesDone = 0, fpsT = 0, fpsN = 0;
-const onsets = [], lats = [];
+const hist = [], lights = [], lats = [], dbg = [];
 let hits = 0, onsetsSeen = 0;
+const resetStats = () => { lats.length = 0; hits = 0; onsetsSeen = 0; };
 const mic = makeMic();
 const wireMs = () => (+$('count').value * 30 + 280) / 1000;
 const periodMs = () => Math.max(SOUND_FRAME_MS, wireMs() + 2);   // main.c frame_period_us(): every style here uses the mic
@@ -441,7 +543,7 @@ function onAudio({ s, on }) {
   for (let i = 0; i < s.length; i++) {
     // linear resample to 32 kHz
     const x = s[i];
-    if (hitAt.has(i)) onsets.push(sampleClock);                  // drum hit, on the board's 32 kHz sample clock
+    if (hitAt.has(i)) hist.push({ t: sampleClock * 1000 / FS, used: false });   // drum hit, on the board's clock (ms)
     while (rsPos <= 1) {
       const v = rsLast + (x - rsLast) * rsPos;
       blockBuf[blockFill++] = mic(v * pa);
@@ -455,29 +557,33 @@ function onAudio({ s, on }) {
 function runBlock() {
   const nowMs = sampleClock * 1000 / FS;                        // this block is complete now
   renderFramesBefore(nowMs);                                    // frames due earlier only saw the previous blocks
-  const beat = board.block(blockBuf);
-  if (beat) {                                                   // which drum hit set it off?
-    const det = sampleClock;
-    while (onsets.length && onsets[0] < det - FS * 0.06) { onsets.shift(); onsetsSeen++; }
-    if (onsets.length && onsets[0] <= det) {
-      const on = onsets.shift(); onsetsSeen++; hits++;
-      let f = nextFrameAt; while (f < nowMs) f += periodMs();     // the frame that first shows it
-      lats.push(f + wireMs() + DS.delay * 1000 - on * 1000 / FS);
-      if (lats.length > 20) lats.shift();
-    }
+  board.lead = Math.round(wireMs() * 1000) + 1500;              // main.c mic_set_lead(): render + wire time
+  const beat = board.block(blockBuf, Math.round(nowMs * 1000));
+  if (beat) {                                                   // main.c draws a new beat at once, once the wire is free
+    const at = Math.max(nowMs + 1, lastFrameAt + wireMs() + 1);
+    drawFrame(at);
+    lights.push({ t: at + wireMs() + DS.delay * 1000, src: beat === 'p' ? 'p' : 'o' });   // when it shows on the LEDs
   }
-  while (onsets.length && onsets[0] < sampleClock - FS * 0.06) { onsets.shift(); onsetsSeen++; }
+  // Match each lit beat with the nearest real drum hit once both sides are in (a predicted beat can come first).
+  while (lights.length && lights[0].t < nowMs - 120) {
+    const { t: L, src } = lights.shift();
+    let best = -1;
+    for (let i = 0; i < hist.length; i++) if (!hist[i].used && (best < 0 || Math.abs(hist[i].t - L) < Math.abs(hist[best].t - L))) best = i;
+    if (best >= 0 && Math.abs(hist[best].t - L) < 80) { hist[best].used = true; lats.push(L - hist[best].t); if (lats.length > 20) lats.shift(); dbg.push([src, Math.round(L - hist[best].t)]); } else dbg.push([src, 'stray']);
+  }
+  while (hist.length && hist[0].t < nowMs - 400) { const o = hist.shift(); onsetsSeen++; if (o.used) hits++; }
+}
+function drawFrame(at) {
+  const dt = lastFrameAt ? at - lastFrameAt : 16;
+  lastFrameAt = at;
+  const n = +$('count').value, base = hexRgb($('rgb').value);
+  frame = ['eq', 'ripple', 'mirror', 'chroma', 'flow'].includes(ui.mode) ? fx.render(ui.mode, snapshot(), n, dt, base) : classic(ui.mode, snapshot(), n, base);
+  framesDone++;
+  nextFrameAt = at + periodMs();
 }
 function renderFramesBefore(nowMs) {
-  while (nextFrameAt < nowMs) {
-    const dt = lastFrameAt ? nextFrameAt - lastFrameAt : 16;
-    lastFrameAt = nextFrameAt;
-    const n = +$('count').value, base = hexRgb($('rgb').value);
-    frame = ['eq', 'ripple', 'mirror', 'chroma', 'flow'].includes(ui.mode) ? fx.render(ui.mode, snapshot(), n, dt, base) : classic(ui.mode, snapshot(), n, base);
-    framesDone++;
-    nextFrameAt += periodMs();
-    if (nextFrameAt < nowMs - 100) nextFrameAt = nowMs;
-  }
+  if (nextFrameAt < nowMs - 100) nextFrameAt = nowMs - 1;
+  while (nextFrameAt < nowMs) drawFrame(nextFrameAt);
 }
 
 // ---- Drawing ---------------------------------------------------------------------------------------------
@@ -520,10 +626,12 @@ function draw(ts) {
   sx.clearRect(0, 0, sw, 70);
   for (let k = 0; k < 16; k++) { const v = board.spec[k] / 255; sx.fillStyle = `rgb(${hsv(Math.floor(k * 240 / 16)).join(',')})`; sx.fillRect(k * bw + 2, 70 - v * 66, bw - 4, v * 66); }
   // speed
-  if (lats.length) { $('latBeat').textContent = (lats.reduce((a, b) => a + b, 0) / lats.length).toFixed(0); $('latMax').textContent = Math.max(...lats).toFixed(0); }
+  if (lats.length) { $('latBeat').textContent = (lats.reduce((a, b) => a + b, 0) / lats.length).toFixed(0); $('latMax').textContent = Math.max(...lats.map(Math.abs)).toFixed(0); }
   else { $('latBeat').textContent = $('latMax').textContent = '–'; }
   if (ts - fpsT > 1000) { $('fps').textContent = ((framesDone - fpsN) * 1000 / (ts - fpsT || 1)).toFixed(0); fpsN = framesDone; fpsT = ts; }
   $('hit').textContent = onsetsSeen ? Math.round(hits * 100 / onsetsSeen) + ' %' : '–';
+  $('bpm').textContent = tracker.bpm() || '–';
+  $('lock').textContent = tracker.shownLock();
   requestAnimationFrame(draw);
 }
 
@@ -535,7 +643,7 @@ $('start').onclick = async () => {
   node = new AudioWorkletNode(actx, 'ledify-src', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
   node.connect(actx.destination);
   node.port.onmessage = e => onAudio(e.data);
-  node.port.postMessage({ play: +$('play').value / 100 });
+  node.port.postMessage({ play: +$('play').value / 100, bpm: +$('tempo').value });
   await setSource(ui.source === 'file' || ui.source === 'mic' ? 'music' : ui.source);
   requestAnimationFrame(draw);
 };
