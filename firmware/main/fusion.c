@@ -28,7 +28,8 @@ static float sm_dev[3], sm_an = 1;          // rest detector input, smoothed ove
 static float hold_l, hold_w;                // height hold inputs, smoothed the same way
 static float acc_lp[3] = {0, 0, 1};         // the accelerometer over the last ~0.5 s: a hold judges the change from it
 static int quiet_n;                         // samples in a row the board hasn't been moved
-static bool was_hold;
+static bool was_hold, boot_zero;            // boot_zero: height 0 is set again at the first settled rest, if it
+static int h_age;                           // comes within 15 s of height starting and nothing was lifted before
 static float held_h, ep_v, ep_vmax;         // a break in the hold: the height before it, and the fastest the
 #define JIGGLE_MS 0.05f                     // accelerometer alone saw it go; under this (m/s) it wasn't lifted
 static float cal_acc[3];
@@ -93,7 +94,10 @@ void fusion_reset(void)
     s.kicks = kicks;
     h_have = s.have_height = false;
     was_hold = false;
-    ep_vmax = 1;
+    ep_vmax = 0;
+    held_h = 0;
+    boot_zero = true;
+    h_age = 0;
     h_warm = 0;
     h_sum = 0;
     acc_off = 0;
@@ -267,6 +271,8 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
             }
             ep_v += az * dt;
             ep_vmax = fmaxf(ep_vmax, fabsf(ep_v));
+        } else if (!was_hold && ep_vmax >= JIGGLE_MS) {
+            boot_zero = false;                   // it was really moved: wherever it rests now isn't 0
         } else if (!was_hold && ep_vmax < JIGGLE_MS) {
             h_ref += s.height - held_h;
             s.height = held_h;
@@ -298,6 +304,14 @@ void fusion_baro(float pa, float dt)
     }
     dt = dt > 0.5f ? 0.5f : dt;
     float err = (alt - h_ref) - s.height;
+    if (h_have && ++h_age > 15 * 20) {          // called at 20 Hz
+        boot_zero = false;
+    }
+    if (s.hold && quiet_n > 4 * FUSION_HZ && boot_zero && h_have) {
+        h_ref += s.height;                       // the first settled rest after boot is height 0 (the half-second
+        s.height = 0;                            // reference alone can sit a few cm off on barometer noise)
+        boot_zero = false;
+    }
     if (s.hold && quiet_n > 4 * FUSION_HZ) {
         // Resting (the IMU has seen no movement for 4 s: the first 3 s of a rest still let the barometer finish
         // settling the height after a move): the board isn't changing height, so whatever the

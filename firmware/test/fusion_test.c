@@ -232,6 +232,19 @@ int main(void)
     printf("button held 3 s, barometer nudged 6 cm: hold released %d, height %+.1f cm from before\n", released, (m.height - h0) * 100);
     assert(released && fabsf(m.height - h0) < 0.01f);
 
+    // Boot at rest with a noisy barometer (1.5 Pa, worse than the board shows): height settles at exactly 0.
+    float worst_boot = 0;
+    for (int trial = 0; trial < 10; trial++) {
+        fusion_reset();
+        for (k = 0; k < 20 * FUSION_HZ; k++) {
+            step(z, off);
+            if (k % 10 == 0) fusion_baro(101070 + 1.5f * gauss(), k ? 0.05f : 0);
+        }
+        worst_boot = fmaxf(worst_boot, fabsf(m.height));
+    }
+    printf("boot at rest, 10 tries: height after 20 s at most %.2f cm\n", worst_boot * 100);
+    assert(worst_boot < 0.005f);
+
     puts("fusion ok");
     return 0;
 }
