@@ -1,7 +1,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <strings.h>
 #include "web.h"
+#include "net.h"
 #include "cmd.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
@@ -64,13 +66,60 @@ static void drop(int fd)
     }
 }
 
+static bool is_client(int fd)
+{
+    for (int i = 0; i < nclients; i++) {
+        if (clients[i] == fd) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The WebSocket takes every command (including "listen", which streams the mic), so only this board's own page may
+// open it. Browsers let any site open a WebSocket to a LAN address, so a page somewhere else could otherwise drive
+// the board from a visitor's browser. The Host must name the board (NAME.local, NAME or its IP: that also stops DNS
+// rebinding, where an outside name is pointed at the board), and a browser's Origin must be that same host.
+// Tools that send no Origin (scripts on the LAN) are let in.
+static bool ws_allowed(httpd_req_t *req)
+{
+    char host[64], origin[80], h[64];
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof host) != ESP_OK) {
+        return false;
+    }
+    strlcpy(h, host, sizeof h);
+    char *colon = strchr(h, ':');
+    if (colon) {
+        if (strcmp(colon, ":80")) {
+            return false;
+        }
+        *colon = 0;
+    }
+    char local[48];
+    snprintf(local, sizeof local, "%s.local", name);
+    const char *ip = net_ip();
+    if (strcasecmp(h, local) && strcasecmp(h, name) && !(ip[0] && !strcmp(h, ip))) {
+        return false;
+    }
+    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof origin) != ESP_OK) {
+        return httpd_req_get_hdr_value_len(req, "Origin") == 0;     // absent is fine, too long to be ours is not
+    }
+    return !strncasecmp(origin, "http://", 7) && !strcasecmp(origin + 7, host);
+}
+
 static esp_err_t h_ws(httpd_req_t *req)
 {
     int fd = httpd_req_to_sockfd(req);
     if (req->method == HTTP_GET) {                                   // handshake done: remember the socket
-        if (nclients < MAX_WS) {
-            clients[nclients++] = fd;
+        if (!ws_allowed(req)) {
+            ESP_LOGW(TAG, "ws client %d refused: not this board's own page", fd);
+            return ESP_FAIL;                                         // closes the connection
         }
+        if (nclients >= MAX_WS) {
+            ESP_LOGW(TAG, "ws client %d refused: %d already connected", fd, MAX_WS);
+            return ESP_FAIL;
+        }
+        clients[nclients++] = fd;
         ESP_LOGI(TAG, "ws client %d connected (%d)", fd, nclients);
         return ESP_OK;
     }
@@ -85,7 +134,10 @@ static esp_err_t h_ws(httpd_req_t *req)
     if (f.type != HTTPD_WS_TYPE_TEXT || !f.len) {
         return ESP_OK;
     }
-    cmd_t c = {0};
+    if (!is_client(fd)) {                                            // only sockets that passed the origin check
+        return ESP_FAIL;
+    }
+    cmd_t c = { .src = CMD_SRC_WS };
     uint8_t buf[sizeof c.text];
     if (f.len >= sizeof buf) {
         return ESP_OK;

@@ -362,7 +362,7 @@ static void load_cfg(void)
 // (Don't set O_NONBLOCK: in that mode the console VFS only looks at the driver's buffer, which doesn't exist.)
 static void console_task(void *arg)
 {
-    cmd_t cmd;
+    cmd_t cmd = { .src = CMD_SRC_LOCAL };
     int len = 0;
     for (;;) {
         char c;
@@ -778,6 +778,8 @@ static void handle_json(const char *text)
     }
 }
 
+static int cmd_src;                      // CMD_SRC_* of the command being handled
+
 static void handle(char *line)
 {
     while (*line == ' ') {
@@ -972,9 +974,9 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "wifi") && n == 3) {
         reply(net_save_wifi(tok[1], tok[2]) ? "ok, restarting" : "err nvs");
         restart_at = esp_timer_get_time() + 2000000;      // in two seconds: more settings may follow (the panel's setup sends several)
-    } else if (!strcmp(tok[0], "listen") && n == 2) {              // stream the mic to the panel
+    } else if (!strcmp(tok[0], "listen") && n == 2) {              // stream the mic back to whoever asked (off at boot)
         int s = atoi(tok[1]);
-        mic_listen(s < 0 ? 0 : s > 300 ? 300 : s);
+        mic_listen(net_listen(cmd_src, s < 0 ? 0 : s > 300 ? 300 : s));
         reply("ok");
     } else if (!strcmp(tok[0], "mic") && n <= 2) {                // mic [N]: live level on the console for N s (default 10, 0 stops)
         int s = n == 2 ? atoi(tok[1]) : 10;
@@ -1250,6 +1252,7 @@ void app_main(void)
         leds_set_budget_mw(power_budget_mw());
         if (xQueueReceive(cmd_q, &cmd, 0)) {
             bool quiet = !strncmp(cmd.text, "audio ", 6);
+            cmd_src = cmd.src;
             handle(cmd.text);
             frame();
             if (!quiet && !pub_due) {

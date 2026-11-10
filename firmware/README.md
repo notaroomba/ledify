@@ -199,7 +199,14 @@ linearly, at `tmax` the strip is dark, and the panel says so.
 `http://ledify.local/` (the `name` setting) from its own flash; that page talks to the board over a WebSocket on
 the LAN, so it works with the internet down. The hosted panel shows the link. The WebSocket carries the MQTT
 payloads as text frames (`state {...}`, `live {...}`, `reply ok`, binary frames are the microphone) and takes
-command lines back.
+command lines back. Only the board's own page may open it: the `Host` must be `NAME.local`, `NAME` or the board's IP
+and a browser's `Origin` must match, so another website open on the same network can't drive the board or listen
+to the mic.
+
+**Microphone audio.** The mic only streams after a `listen N` command (at most 300 s, off at every boot; the panel
+renews it every 45 s while you listen) and only back the way the request came: a listen over MQTT goes to
+`ledify/<id>/audio` on the broker, a listen from the board's WebSocket stays on the LAN, and one from the USB console
+or Bluetooth goes to both.
 
 **Pixel streams.** The board listens for DDP on UDP 4048 and E1.31/sACN on UDP 5568 (170 pixels per universe,
 universes 1 and up, unicast or the 239.255.0.U multicast groups). While frames arrive they are shown as they come,

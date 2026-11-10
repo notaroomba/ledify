@@ -22,3 +22,6 @@ void net_publish(const char *light_json, const char *status_json, const char *se
 void net_publish_live(const char *json);   // not retained, QoS 0
 void net_publish_reply(const char *text);  // command replies, not retained
 void net_publish_audio(const void *pcm, int len);   // 16 kHz 16-bit mono, enqueued QoS 0
+// "listen N" from src (CMD_SRC_*): the mic audio goes only back the way the request came (MQTT to the broker,
+// WS to the board's own WebSocket; the console and BLE open both). Returns the seconds the mic must keep streaming.
+int net_listen(int src, int secs);

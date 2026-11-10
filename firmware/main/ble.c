@@ -26,7 +26,7 @@ static const ble_uuid128_t UUID_TX = BLE_UUID128_INIT(
 static int rx_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        cmd_t cmd = {0};
+        cmd_t cmd = { .src = CMD_SRC_BLE };
         uint16_t len = 0;
         ble_hs_mbuf_to_flat(ctxt->om, cmd.text, sizeof cmd.text - 1, &len);
         cmd.text[len] = 0;
