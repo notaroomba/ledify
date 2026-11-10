@@ -8,7 +8,8 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/pd.c` | USB-PD sink on the FUSB302B: requests the most powerful fixed offer up to 20 V, renegotiates for 15 V+ when the 12 V output is selected |
 | `main/leds.c` | Addressable strip over RMT (WS2812 family, WS2811, SK6812, WS2816), the colour sources, the power cap, buck enable, 5 V / 12 V select |
 | `main/sensors.c` | OPT4001 light sensor (I2C), BMI323 IMU and BMP581 barometer (SPI) |
-| `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble |
+| `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble and a 16-band spectrum |
+| `main/fx.c` | The whole-strip sound styles (`eq`, `ripple`, `mirror`, `chroma`, `flow`), plain C (`test/fx_test.c` checks them on the host) |
 | `main/fft.c` | 256-point fixed-point FFT and the band sums, plain C (`test/fft_test.c` checks it on the host) |
 | `main/ble.c` | Nordic UART service on NimBLE |
 | `main/net.c` | Wi-Fi station (primary + fallback network), MQTT client, Home Assistant discovery |
@@ -39,12 +40,13 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `level N` | Brightness cap, 0-255 |
 | `count N` | How many pixels are driven, 1-1000 (`MAX_LEDS`). Saved. Also a slider in Home Assistant |
 | `type ws2812` | Chip type: `ws2812` (also B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w` (RGBW), `ws2816`. Saved |
-| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
-| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter` (see [Mixing styles](#mixing-styles)) |
+| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
+| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow` (see [Mixing styles](#mixing-styles)) |
 | `bright level` / `bright sound` | Brightness source: the fixed `level`, or `level` scaled by the microphone |
 | `overlay none` / `vu` / `pulse` | Light only as many pixels as the sound level, or flash on beats |
 | `auto on` / `auto off` | Scale the brightness with the light sensor between `lux_lo` and `lux_hi`, off under `night` |
 | `gain N` | Microphone gain 1-100, default 25: how much a quiet room is amplified. Saved |
+| `react N` | How fast the sound styles fall back after a sound, 1-100, default 60: the release runs from about 1 s at 1 to 40 ms at 100; the rise is always instant. Saved |
 | `lux LO HI` | Lux at which auto brightness sits at its floor and reaches full, default `0 500`. Saved; also one at a time as `lux_lo N` / `lux_hi N` |
 | `night N` | Lux below which auto brightness turns the strip off, 0 (default) disables. Saved |
 | `temp LO HI` | °C shown as blue and as red by the `temp` colour, white halfway, default `15 30`. Saved; also `temp_lo N` / `temp_hi N` |
@@ -76,11 +78,11 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `tmax C` | Thermal limit: the strip dims over the last 10 °C before the board reaches this temperature and is dark at it (default 70, 0 = off). `status` reports the percent removed as `hot`. Saved |
 | `name HOST` | mDNS hostname for the local panel, `http://HOST.local` (default `ledify`). Saved |
 | `otabase URL` | Only accept `ota` images whose URL starts with this (`otabase any` clears it), so a leaked broker login cannot flash other firmware. Saved |
-| `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
+| `live N` | Stream loudness, bands, pulse, dB, the brightness cap, the 16-band spectrum (`spec`) and the estimated sound-to-light delay in ms (`lat`) to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
 | `mic [N]` | Print the microphone level on the USB console 4 times a second for N seconds (default 10, 0 stops): the loudest 8 ms block as dBFS and approximate dB SPL, the raw 24-bit min/max/mean, and a bar. A quiet room should sit around -60 to -70 dBFS and a clap should jump 30 dB or more. All zeros or a fixed value means no data from the mic |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |
-| `audio L B M T P` | Feed loudness, bass, mid, treble and pulse (0-255) from outside; overrides the microphone for 1 s per packet |
+| `audio L B M T P [SPEC]` | Feed loudness, bass, mid, treble and pulse (0-255) from outside, and optionally the 16-band spectrum as 32 hex digits; overrides the microphone for 1 s per packet. Without SPEC the three bands are spread over the spectrum |
 | `help` | Command list |
 
 Replies go to the log and, over BLE, to the TX characteristic. Every peripheral is probed at startup and skipped if it doesn't answer, so a board with a missing sensor still runs; sound styles on a board without a microphone answer `ok, no mic` and stay dark.
@@ -96,6 +98,13 @@ Every frame is **colour × brightness × overlay**. `main.c` composes the three 
 | `temp` | One colour from blue at `temp_lo` through white to red at `temp_hi`, from the barometer or a fed-in `temp` |
 | `spectrum` | Three bars, red / green / blue, whose lengths follow bass / mid / treble |
 | `meter` | Green to yellow to red along the strip, the classic VU colours |
+| `eq` | 16-band spectrum: one zone per band, bass (red) at the start to treble (pink) at the end, each zone as bright as its band |
+| `ripple` | Each beat sends a ring outward from the centre, coloured by where the sound sits (bass red, mid green, treble blue), over a faint glow of the `rgb` colour |
+| `mirror` | Level meter growing from the centre both ways, green to red, with a white peak dot that holds 0.4 s and then falls |
+| `chroma` | The whole strip in the colour of the sound: bass red, mid green, treble blue |
+| `flow` | A waterfall: the sound's colour and loudness enter at the start and scroll along the strip in about 2 s |
+
+The last five draw the whole strip at once and keep state between frames, so they don't go in a `seg` zone (zones on top of them still work).
 
 | Brightness | What happens to `level` |
 | --- | --- |
@@ -123,7 +132,9 @@ They stack: `color rainbow`, `auto on`, `overlay vu` is a rainbow VU meter that 
 
 ### Sound processing
 
-A microphone task reads 256 samples (8 ms) at a time at 32 kHz, so the main loop never waits for audio. Per block: RMS × `gain`, held under a peak follower with a 2 s decay, gives the loudness, so a quiet room stays dark at a given gain while a loud room isn't pinned at 100 %. A beat is a block more than 1.5× its 1 s running average, at most one per 100 ms. Every fourth block the last 16 ms, decimated to 16 kHz, go through a Hann window and the fixed-point FFT in `fft.c` (62.5 Hz bins: bass 1-3, mid 4-31, treble 32-127), each band normalised against its own peak. `status` shows `sound` (raw RMS, 0-1) and `loud` (0-255 after gain) for tuning `gain`. Styles that move redraw every `FRAME_MS` (33 ms, about 9 ms of which is the wire time for 300 pixels); still ones once a second.
+A microphone task reads 256 samples (8 ms) at a time at 32 kHz, so the main loop never waits for audio. Per block: RMS × `gain`, held under a peak follower with a 2 s decay, gives the loudness, so a quiet room stays dark at a given gain while a loud room isn't pinned at 100 %. A beat is a block more than 1.5× its 1 s running average, at most one per 100 ms. Every second block (16 ms, half-overlapping windows) the last 16 ms, decimated to 16 kHz, go through a Hann window and the fixed-point FFT in `fft.c` (62.5 Hz bins: bass 1-3, mid 4-31, treble 32-127, plus 16 log-spaced bands from 62.5 Hz to 8 kHz), each band normalised against its own peak but never below 1/8 of the loudest band's peak or of full scale, so mid and treble move at room levels while a silent room stays dark. `status` shows `sound` (raw RMS, 0-1) and `loud` (0-255 after gain) for tuning `gain`. Sound styles redraw every `SOUND_FRAME_MS` (16 ms, about 60 fps; longer strips as fast as the wire allows, 30 µs per pixel), other moving styles every `FRAME_MS` (33 ms), still ones once a second. From a drum hit to the LEDs takes about 15 ms on average and 20-25 ms at worst with 120 pixels: the 8 ms block, up to one frame of waiting and the wire time. The log line every 3 s prints the board's own estimate as `sound to light ~N ms`, and `live` sends it as `lat`.
+
+`web/public/sim.html` (the hosted panel's `/sim.html`) runs this whole pipeline in the browser, line for line, on a microphone simulated from the ICS-43434 datasheet, with test signals, an audio file or the device's mic, so styles and settings can be tried without a board.
 
 ## Wiring the strip
 

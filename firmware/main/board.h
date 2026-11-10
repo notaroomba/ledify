@@ -22,6 +22,7 @@
 #define MAX_LEDS     1000   // most the firmware will drive (3 KB pixel buffer, 30 ms per frame)
 #define PUBLISH_MS   5000   // state + sensors to MQTT this often (the panel shows them live)
 #define FRAME_MS       33   // live styles redraw at 30 fps; 300 pixels take 9 ms of that on the wire
+#define SOUND_FRAME_MS 16   // sound styles redraw at about 60 fps (or as fast as the wire allows on long strips)
 // Per-pixel draw, FastLED's WS2812 power model at 5 V: 16/11/15 mA per channel at full, 1 mA dark. WLED's limiter
 // uses the same idea with 55 mA per full-white pixel. ponytail: measure your strip and adjust if the cap is off.
 #define LED_RED_MW    80

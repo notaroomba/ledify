@@ -46,7 +46,14 @@ void fft256(int32_t *re, int32_t *im)
     }
 }
 
+const uint8_t fft_spec_edge[FFT_SPEC + 1] = {1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 21, 27, 35, 46, 60, 80, 128};
+
 void fft_bands(const int16_t x[FFT_N], uint32_t out[3])
+{
+    fft_spectrum(x, out, NULL);
+}
+
+void fft_spectrum(const int16_t x[FFT_N], uint32_t out[3], uint32_t spec[FFT_SPEC])
 {
     static int32_t re[FFT_N], im[FFT_N];
     static const uint8_t edge[4] = {1, 4, 32, 128};     // 62.5 Hz bins; bin 0 is DC. ponytail: three fixed bands, go to 512 points if the bass needs splitting
@@ -63,5 +70,14 @@ void fft_bands(const int16_t x[FFT_N], uint32_t out[3])
             sum += abs(re[k]) + abs(im[k]);
         }
         out[b] = sum / (edge[b + 1] - edge[b]);
+    }
+    if (spec) {
+        for (int b = 0; b < FFT_SPEC; b++) {
+            uint32_t sum = 0;
+            for (int k = fft_spec_edge[b]; k < fft_spec_edge[b + 1]; k++) {
+                sum += abs(re[k]) + abs(im[k]);
+            }
+            spec[b] = sum / (fft_spec_edge[b + 1] - fft_spec_edge[b]);
+        }
     }
 }

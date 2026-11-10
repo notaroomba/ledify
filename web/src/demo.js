@@ -5,7 +5,7 @@ import { ingest, hooks, setUi } from './store';
 const st = {
   fw: 'demo', power: 1, volt: 5, mode: 'solid', color: 'solid', bright: 'level', overlay: 'none', auto: 0, level: 160, count: 300,
   type: 'ws2812', cap: 160, gain: 25, lux_lo: 0, lux_hi: 500, night: 0, temp_lo: 15, temp_hi: 30, limit: 0, pdmax: 20000,
-  pddelay: 100, droop: 0, tmax: 70, fade: 300, stripe: '0', scroll: 0, cover: 'ffffff@0', pd: { attached: 1, ready: 1, mv: 20000, ma: 3000 }, net: 'demo board, nothing is wired',
+  pddelay: 100, droop: 0, tmax: 70, fade: 300, react: 60, stripe: '0', scroll: 0, cover: 'ffffff@0', pd: { attached: 1, ready: 1, mv: 20000, ma: 3000 }, net: 'demo board, nothing is wired',
   pdos: [[5000, 3000], [9000, 3000], [15000, 3000], [20000, 3000]], need_mw: 15000, budget_mw: 51000,
   palette: 'ff3c00@0,ff8c00@35,ff0066@70,4b0082@100', time: '', tz: 'UTC0', name: 'ledify', ip: '', clients: 0, hot: 0,
   board_c: 31.2, sleep: 0, rise: 0, sched: [], segs: [], stream: null, boots: 1, rst: 'poweron', boot_log: [],
@@ -61,7 +61,7 @@ export function startDemo() {
   setInterval(() => {
     t += 0.1;
     const w = (f, p = 0) => Math.round(128 + 120 * Math.sin(t * f + p));
-    ingest('ledify/demo/live', JSON.stringify({ loud: w(2), bands: [w(3), w(5, 1), w(7, 2)], pulse: Math.sin(t * 2) > 0.95 ? 255 : 0, db: 50 + Math.round(10 * Math.sin(t)), cap: st.cap }));
+    ingest('ledify/demo/live', JSON.stringify({ loud: w(2), bands: [w(3), w(5, 1), w(7, 2)], pulse: Math.sin(t * 2) > 0.95 ? 255 : 0, db: 50 + Math.round(10 * Math.sin(t)), cap: st.cap, lat: 21, spec: Array.from({ length: 16 }, (_, k) => w(2 + k * 0.4, k)) }));
     if (st.sleep > 0 && (st.sleep = Math.max(0, st.sleep - 0.1)) === 0) { st.power = 0; pub(); }
     if (st.rise > 0) st.rise = Math.max(0, st.rise - 0.1);
   }, 100);
