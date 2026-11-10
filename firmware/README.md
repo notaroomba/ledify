@@ -56,7 +56,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
-| `wifi2 SSID PASSWORD` | Add or update a fallback network and restart, up to 5 (`wifi2 SSID -` for an open network). The board joins the primary first; after `WIFI_FAILS_BEFORE_SWITCH` failed attempts it scans and joins the strongest saved network in range |
+| `wifi2 SSID PASSWORD` | Add or update a fallback network and restart, up to 5 (`wifi2 SSID -` for an open network). The board tries the primary first, then each fallback once in turn, and loops back to the primary after the last one until one connects. If a connected network drops, it moves on to the next one the same way |
 | `wifi2 list` / `wifi2 del SSID\|N` / `wifi2 off` | Show the fallbacks (names only), remove one and restart, or remove them all and restart |
 | `wifi2 try SSID\|N` | Join that fallback now and stay on it until the next boot, saves nothing |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
