@@ -34,6 +34,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | Command | Action |
 | --- | --- |
 | `on` / `off` | LED buck on or off. Boots off |
+| `blink [N]` | Flash the strip blue N times (default 10, 0 stops), two flashes a second at the current `level`, then back to what it showed. Turns the output on for the blink if it was off, and off again afterwards. Never changes the 5 V / 12 V selection |
 | `rgb R G B` | Fill the strip, 0-255 each |
 | `level N` | Brightness cap, 0-255 |
 | `count N` | How many pixels are driven, 1-1000 (`MAX_LEDS`). Saved. Also a slider in Home Assistant |
@@ -53,7 +54,9 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `pd` | The source's offered voltages and the current contract |
 | `net` | Wi-Fi and MQTT state |
 | `wifi SSID PASSWORD` | Save Wi-Fi credentials and restart |
-| `wifi2 SSID PASSWORD` | Save a fallback network and restart (`wifi2 off` clears it). The board joins the primary first and switches after `WIFI_FAILS_BEFORE_SWITCH` failed attempts, alternating until one works |
+| `wifi2 SSID PASSWORD` | Add or update a fallback network and restart, up to 5 (`wifi2 SSID -` for an open network). The board joins the primary first; after `WIFI_FAILS_BEFORE_SWITCH` failed attempts it scans and joins the strongest saved network in range |
+| `wifi2 list` / `wifi2 del SSID\|N` / `wifi2 off` | Show the fallbacks (names only), remove one and restart, or remove them all and restart |
+| `wifi2 try SSID\|N` | Join that fallback now and stay on it until the next boot, saves nothing |
 | `mqtt URL [USER PASSWORD]` | Save the broker and restart, e.g. `mqtt mqtt://host:1883 ledify secret` |
 | `pddelay N` | Milliseconds after boot before the board starts talking PD, 0-30000 (saved); a diagnostic for chargers that cut power during the handshake |
 | `pdmax N` | Highest PD voltage to request, 5000-20000 mV (saved). `status` also reports `boots`, the reset reason and a log of the last four boots with what each charger offered; two boots in a row that die early make the next one stay at 5 V |
@@ -75,6 +78,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `otabase URL` | Only accept `ota` images whose URL starts with this (`otabase any` clears it), so a leaked broker login cannot flash other firmware. Saved |
 | `live N` | Stream loudness, bands, pulse, dB and the brightness cap to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `listen N` | Stream the microphone as 16 kHz 16-bit PCM to `ledify/<id>/audio` for N seconds (the panel's Listen button plays it) |
+| `mic [N]` | Print the microphone level on the USB console 4 times a second for N seconds (default 10, 0 stops): the loudest 8 ms block as dBFS and approximate dB SPL, the raw 24-bit min/max/mean, and a bar. A quiet room should sit around -60 to -70 dBFS and a clap should jump 30 dB or more. All zeros or a fixed value means no data from the mic |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |
 | `audio L B M T P` | Feed loudness, bass, mid, treble and pulse (0-255) from outside; overrides the microphone for 1 s per packet |
 | `help` | Command list |

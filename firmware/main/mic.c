@@ -39,6 +39,7 @@ static uint32_t peak_rms;
 static int64_t peak_at;
 static volatile uint8_t fed_loud, fed_bands[3], fed_pulse;   // analysis fed from the panel (its mic or a file)
 static volatile int64_t fed_at;
+static volatile uint16_t meter_rms;   // loudest block since mic_meter() last read it
 
 static bool fed(void)
 {
@@ -58,6 +59,9 @@ static void block(void)
         acc += (int64_t)s * s;
     }
     rms = (uint32_t)sqrtf((float)(acc / N)) >> 8;
+    if (rms > meter_rms) {
+        meter_rms = rms;
+    }
     int64_t now = esp_timer_get_time();
     if (rms > peak_rms || now - peak_at > 60000000LL) {      // keep the loudest block of the last minute
         peak_rms = rms;
@@ -239,6 +243,24 @@ int mic_raw_json(char *out, size_t n)
     }
     w += snprintf(out + w, n - w, "]}}");
     return w;
+}
+
+float mic_meter(int32_t *mn, int32_t *mx, int32_t *mean)
+{
+    int32_t lo = INT32_MAX, hi = INT32_MIN;
+    int64_t sum = 0;
+    for (int i = 0; i < N; i++) {
+        int32_t s = raw[i] >> 8;
+        sum += s;
+        lo = s < lo ? s : lo;
+        hi = s > hi ? s : hi;
+    }
+    *mn = lo;
+    *mx = hi;
+    *mean = sum / N;
+    uint16_t r = meter_rms;
+    meter_rms = 0;
+    return r / 32768.0f;
 }
 
 float mic_db_peak(void)

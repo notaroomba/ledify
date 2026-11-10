@@ -14,4 +14,7 @@ void mic_feed(uint8_t loud, const uint8_t bands[3], uint8_t pulse); // from the 
 void mic_stats(uint32_t *max_us, uint32_t *dropped);
 int mic_raw_json(char *out, size_t n);   // diagnostics JSON: current samples and the loudest block of the last minute
 float mic_db_peak(void);                 // loudest block of the last minute, approximate dB SPL
+// "mic" console meter: loudest block RMS (0..1 of full scale) since the last call, and the current block's raw
+// 24-bit min/max/mean, so a dead mic (all 0, stuck at -1, or DC only) is plain to see. Resets the peak.
+float mic_meter(int32_t *mn, int32_t *mx, int32_t *mean);
 void mic_listen(int secs);               // stream 16 kHz PCM to MQTT for this long (the panel renews it) // worst block time (budget 8000 us) and lost blocks since last call

@@ -7,7 +7,7 @@
 //   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
 //   temp 21.5                                      feed a temperature in for the temp colour
 //   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 yes | status | pd | net | help
-//   wifi SSID PASSWORD | wifi2 SSID PASSWORD | mqtt URL [USER PASSWORD]   (saved to NVS, then the board restarts)
+//   wifi SSID PASSWORD | wifi2 SSID PASSWORD|- | wifi2 list|off|del X|try X | mqtt URL [USER PASSWORD]   (saved to NVS, then the board restarts)
 // Home Assistant talks JSON to ledify/<id>/light/set; see net.c for the topics.
 //
 // A frame is colour x brightness x overlay, drawn by leds_frame():
@@ -15,6 +15,7 @@
 //   brightness  level, scaled by the lux curve when auto is on, by the microphone when bright is sound
 //   overlay     none | vu (lit length follows the sound) | pulse (flash on each beat, a quarter in between)
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -146,6 +147,11 @@ static bool off_pending;                    // "off" fades first; the rail goes 
 static int hot_scale = 255;                 // brightness left by the thermal limit, 0..255
 static float board_c = -100;                // latest board temperature
 static int64_t restart_at;                  // a saved network setting restarts the board shortly after
+static int64_t meter_until, meter_next;     // "mic N": print the mic level on the console 4 times a second
+static int blink_left;                      // "blink N": half-periods of blue flashing still to go, 0 = not blinking
+static int64_t blink_next;
+static bool blink_lit, blink_was_on;        // blink_was_on: the output was on before, so leave it on afterwards
+#define BLINK_HALF_US 250000                // 2 flashes per second
 // What the strip was doing, in RTC memory: it survives a software restart (an update, a saved network setting), not
 // a power cut, so the strip comes back as it was after an OTA without ever powering up a strip on its own at boot.
 #define KEEP_MAGIC 0x4c454431
@@ -507,6 +513,7 @@ static void set_power(bool on)
         power = false;
         sleep_end = 0;
         rise_end = 0;
+        blink_left = 0;
         if (fade) {
             off_pending = true;
         } else {
@@ -523,6 +530,14 @@ static void frame(void)
     }
     uint8_t bands[3];
     mic_bands(bands);
+    if (blink_left && !off_pending) {                            // blue flash over whatever the strip was showing
+        uint8_t r, g, b;
+        leds_get_color(&r, &g, &b);
+        leds_fill(0, 0, 255);
+        leds_frame(COLOR_SOLID, blink_lit ? (leds_get_level() ? leds_get_level() : 128) : 0, leds_get_count(), bands, true);
+        leds_fill(r, g, b);
+        return;
+    }
     int lvl = leds_get_level();
     if (auto_on) {
         lvl = lux_level(lvl);
@@ -850,6 +865,30 @@ static void handle(char *line)
         leds_select_12v(v == 12);
         volt = v;
         reply("ok, output is off, send on");
+    } else if (!strcmp(tok[0], "blink") && n <= 2) {              // blink [N]: flash the strip blue N times (default 10), 0 stops
+        int k = n == 2 ? atoi(tok[1]) : 10;
+        if (k < 0 || k > 1000) {
+            reply("err blink 0-1000");
+            return;
+        }
+        if (!k) {
+            if (blink_left) {
+                blink_left = 1;                                  // ends on the next tick, which restores the output
+                blink_next = 0;
+            }
+            reply("ok");
+            return;
+        }
+        if (!blink_left) {
+            blink_was_on = power;
+        }
+        if (!power) {
+            set_power(true);                                     // the rail at the selected voltage; blink never changes it
+        }
+        blink_left = k * 2;
+        blink_lit = true;
+        blink_next = esp_timer_get_time() + BLINK_HALF_US;
+        reply("ok");
     } else if (!strcmp(tok[0], "status")) {
         status(out, sizeof out);
         reply(out);
@@ -871,6 +910,16 @@ static void handle(char *line)
         int s = atoi(tok[1]);
         mic_listen(s < 0 ? 0 : s > 300 ? 300 : s);
         reply("ok");
+    } else if (!strcmp(tok[0], "mic") && n <= 2) {                // mic [N]: live level on the console for N s (default 10, 0 stops)
+        int s = n == 2 ? atoi(tok[1]) : 10;
+        if (!have_mic) {
+            reply("err no mic, I2S did not start");
+            return;
+        }
+        s = s < 0 ? 0 : s > 300 ? 300 : s;
+        meter_until = s ? esp_timer_get_time() + (int64_t)s * 1000000 : 0;
+        meter_next = 0;
+        reply("ok, see the console");
     } else if (!strcmp(tok[0], "micraw")) {                       // diagnostics on the live topic
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
@@ -921,8 +970,20 @@ static void handle(char *line)
             return;
         }
         reply(ota_start(tok[1]) ? "ok, downloading; the board restarts when done" : "err ota busy or bad url");
-    } else if (!strcmp(tok[0], "wifi2") && (n == 2 || n == 3)) {   // "wifi2 off" clears the fallback
-        reply(net_save_wifi2(n == 3 ? tok[1] : "", n == 3 ? tok[2] : "") ? "ok, restarting" : "err nvs");
+    } else if (!strcmp(tok[0], "wifi2") && n == 2 && !strcmp(tok[1], "list")) {
+        net_fallback_list(out, sizeof out);
+        reply(out);
+    } else if (!strcmp(tok[0], "wifi2") && n == 3 && !strcmp(tok[1], "try")) {   // until the next boot, saves nothing
+        reply(net_fallback_try(tok[2]) ? "ok, joining" : "err no such fallback");
+    } else if (!strcmp(tok[0], "wifi2") && (n == 2 || n == 3)) {   // the panel sends no password for an open network, "-" says so explicitly
+        bool ok = n == 2 && !strcmp(tok[1], "off") ? net_fallback_clear()
+                  : n == 3 && !strcmp(tok[1], "del") ? net_fallback_del(tok[2])
+                  : net_fallback_add(tok[1], n == 3 && strcmp(tok[2], "-") ? tok[2] : "");
+        if (!ok) {
+            reply("err fallback list full, name too long, or no such entry");
+            return;
+        }
+        reply("ok, restarting");
         restart_at = esp_timer_get_time() + 2000000;      // in two seconds: more settings may follow (the panel's setup sends several)
     } else if (!strcmp(tok[0], "mqtt") && (n == 2 || n == 4)) {
         reply(net_save_mqtt(tok[1], n == 4 ? tok[2] : NULL, n == 4 ? tok[3] : NULL) ? "ok, restarting" : "err nvs");
@@ -1013,10 +1074,10 @@ static void handle(char *line)
     } else if (!strcmp(tok[0], "otabase") && n == 2) {            // only accept OTA images from under this URL ("any" clears)
         reply(save_str("ota_base", strcmp(tok[1], "any") ? tok[1] : "") ? "ok" : "err nvs");
     } else if (!strcmp(tok[0], "help")) {
-        reply("on off rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
+        reply("on off blink<n> rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
               "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> scroll<px/s> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
-              "name<host> live<s> listen<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|off> mqtt<url [user pass]>");
+              "name<host> live<s> listen<s> mic<s> audio<l b m t p> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -1116,6 +1177,18 @@ void app_main(void)
             pub_due = now + 150000;
         }
         btn_was = btn;
+        if (blink_left && now >= blink_next) {
+            blink_lit = !blink_lit;
+            blink_next = now + BLINK_HALF_US;
+            if (!--blink_left && !blink_was_on) {
+                set_power(false);                                // it was off before the blink: back off
+            }
+            frame();                                             // the next flash, or back to the normal style
+            last_frame = now;
+            if (!blink_left) {
+                pub_due = now + 150000;
+            }
+        }
         if (sleep_end && now >= sleep_end) {
             sleep_end = 0;
             set_power(false);
@@ -1183,6 +1256,18 @@ void app_main(void)
                 save_i16(settings[i].key, *settings[i].val);
             }
             dirty_at = 0;
+        }
+        if (now < meter_until && now >= meter_next) {          // "mic": loudest 8 ms block of each quarter second
+            int32_t mn, mx, mean;
+            float r = mic_meter(&mn, &mx, &mean);
+            float dbfs = r > 0 ? 20 * log10f(r * 1.4142f) : -120;   // 0 dBFS = full-scale sine
+            int bar = dbfs < -90 ? 0 : (int)((dbfs + 90) / 3);          // one # per 3 dB above -90 dBFS
+            char bars[31];
+            memset(bars, '#', sizeof bars - 1);
+            bars[bar < 30 ? bar : 30] = 0;
+            ESP_LOGI(TAG, "mic %6.1f dBFS ~%3.0f dB SPL  raw min %ld max %ld mean %ld  |%-30s|", dbfs,
+                     dbfs + MIC_DB_FULL_SCALE, (long)mn, (long)mx, (long)mean, bars);
+            meter_next = now + 250000;
         }
         if (now < live_until && now - last_live > LIVE_MS * 1000LL) {
             uint8_t b[3] = {0};

@@ -15,6 +15,8 @@
 //   ledify/ID/status       online / offline (retained, last will)
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
+#include <stdlib.h>
 #include "net.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -35,8 +37,11 @@
 
 static const char *TAG = "net";
 static QueueHandle_t cmd_q;
-static char ssid[33], pass[65], ssid2[33], pass2[65], mqtt_url[128], mqtt_user[48], mqtt_pass[64];
-static int which, fails;                  // which network we are on (0 primary, 1 fallback) and failed joins in a row
+static struct { char ssid[33], pass[65]; } nets[WIFI_NETS];   // 0 is the primary, the rest fallbacks (empty ssid = unused slot)
+static char mqtt_url[128], mqtt_user[48], mqtt_pass[64];
+static int which, fails;                  // which of nets[] we are on and failed joins in a row
+static int pin = -1;                      // "wifi2 try": the network to stay on until the next boot
+static bool scanning;
 static char id[16];                       // ledify_xxxxxx
 static char ip[16];
 static bool wifi_up, mqtt_up;
@@ -76,15 +81,82 @@ bool net_save_wifi(const char *s, const char *p)
     return save("ssid", s) && save("pass", p);
 }
 
-bool net_save_wifi2(const char *s, const char *p)
+static void slot_keys(int i, char *k_ssid, char *k_pass)    // nets[1] keeps the old "ssid2" keys so saved fallbacks survive
 {
-    return save("ssid2", s) && save("pass2", p);
+    sprintf(k_ssid, "ssid%d", i + 1);
+    sprintf(k_pass, "pass%d", i + 1);
+}
+
+static bool set_fallback(int i, const char *s, const char *p)
+{
+    char ks[8], kp[8];
+    slot_keys(i, ks, kp);
+    strlcpy(nets[i].ssid, s, sizeof nets[i].ssid);
+    strlcpy(nets[i].pass, p, sizeof nets[i].pass);
+    return save(ks, s) && save(kp, p);
+}
+
+// A name, or failing that a list number. 0 if there is no such fallback.
+static int find_fallback(const char *x)
+{
+    int n = atoi(x);
+    for (int i = 1; i < WIFI_NETS; i++) {
+        if (nets[i].ssid[0] && !strcmp(nets[i].ssid, x)) {
+            return i;
+        }
+    }
+    return n >= 1 && n < WIFI_NETS && nets[n].ssid[0] ? n : 0;
+}
+
+bool net_fallback_add(const char *s, const char *p)
+{
+    int f = find_fallback(s), free_slot = 0;
+    for (int i = WIFI_NETS - 1; i >= 1; i--) {
+        free_slot = nets[i].ssid[0] ? free_slot : i;
+    }
+    f = f && !strcmp(nets[f].ssid, s) ? f : free_slot;   // a numeric find is not a match by name
+    return f && strlen(s) < sizeof nets[0].ssid && strlen(p) < sizeof nets[0].pass && set_fallback(f, s, p);
+}
+
+bool net_fallback_del(const char *x)
+{
+    int i = find_fallback(x);
+    return i && set_fallback(i, "", "");
+}
+
+bool net_fallback_clear(void)
+{
+    bool ok = true;
+    for (int i = 1; i < WIFI_NETS; i++) {
+        ok = set_fallback(i, "", "") && ok;
+    }
+    return ok;
+}
+
+void net_fallback_list(char *out, size_t n)
+{
+    size_t w = snprintf(out, n, "fallbacks:");
+    for (int i = 1; i < WIFI_NETS; i++) {
+        if (nets[i].ssid[0] && w < n) {
+            w += snprintf(out + w, n - w, " %d %s%s;", i, nets[i].ssid, nets[i].pass[0] ? "" : " (open)");
+        }
+    }
+}
+
+bool net_fallback_try(const char *x)
+{
+    int i = find_fallback(x);
+    if (!i) {
+        return false;
+    }
+    pin = i;
+    return esp_wifi_disconnect() == ESP_OK;   // the DISCONNECTED event does the rest
 }
 
 // Point the station at network i; the connect itself happens on the next STA_START / DISCONNECTED event.
 static void apply_wifi(int i)
 {
-    const char *s = i ? ssid2 : ssid, *p = i ? pass2 : pass;
+    const char *s = nets[i].ssid, *p = nets[i].pass;
     wifi_config_t wc = {0};
     strncpy((char *)wc.sta.ssid, s, sizeof wc.sta.ssid - 1);
     strncpy((char *)wc.sta.password, p, sizeof wc.sta.password - 1);
@@ -269,19 +341,60 @@ static void mqtt_start(void)
     esp_mqtt_client_start(mqtt);
 }
 
+// After a scan: go to the "wifi2 try" network, or the strongest saved network in range. None in range: stay put.
+static void scan_done(void)
+{
+    int rssi[WIFI_NETS], best = -1;
+    for (int i = 0; i < WIFI_NETS; i++) {
+        rssi[i] = INT_MIN;
+    }
+    wifi_ap_record_t ap;
+    while (esp_wifi_scan_get_ap_record(&ap) == ESP_OK) {     // one at a time, a campus has far too many APs for a fixed array
+        for (int i = 0; i < WIFI_NETS; i++) {
+            if (nets[i].ssid[0] && ap.rssi > rssi[i] && !strcmp((char *)ap.ssid, nets[i].ssid)) {
+                rssi[i] = ap.rssi;
+            }
+        }
+    }
+    esp_wifi_clear_ap_list();
+    for (int i = 0; i < WIFI_NETS; i++) {
+        if (rssi[i] != INT_MIN) {
+            ESP_LOGI(TAG, "wifi: scan sees \"%s\" at %d dBm", nets[i].ssid, rssi[i]);
+            best = best < 0 || rssi[i] > rssi[best] ? i : best;
+        }
+    }
+    int to = pin >= 0 ? pin : best;
+    if (to >= 0 && to != which) {
+        which = to;
+        apply_wifi(which);
+    }
+}
+
 static void wifi_event(void *arg, esp_event_base_t base, int32_t event_id, void *data)
 {
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_up = false;
-        if (ssid2[0] && ++fails >= WIFI_FAILS_BEFORE_SWITCH) {   // the other network may be the one in range
-            fails = 0;
-            which ^= 1;
-            apply_wifi(which);
-        } else {
-            ESP_LOGW(TAG, "wifi disconnected, retrying");
+        ESP_LOGW(TAG, "wifi \"%s\" disconnected, reason %d", nets[which].ssid, ((wifi_event_sta_disconnected_t *)data)->reason);
+        if (scanning) {
+            return;
         }
+        bool any = false;
+        for (int i = 0; i < WIFI_NETS; i++) {
+            any |= i != which && nets[i].ssid[0];
+        }
+        if (pin >= 0 ? which != pin : any && ++fails >= WIFI_FAILS_BEFORE_SWITCH) {   // another saved network may be the one in range
+            fails = 0;
+            scanning = esp_wifi_scan_start(NULL, false) == ESP_OK;
+            if (scanning) {
+                return;                              // SCAN_DONE picks the network and connects
+            }
+        }
+        esp_wifi_connect();
+    } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE && scanning) {
+        scanning = false;
+        scan_done();
         esp_wifi_connect();
     } else if (base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
@@ -317,17 +430,22 @@ void net_init(QueueHandle_t q)
     load("mqtt_url", mqtt_url, sizeof mqtt_url);
     load("mqtt_user", mqtt_user, sizeof mqtt_user);
     load("mqtt_pass", mqtt_pass, sizeof mqtt_pass);
-    if (!load("ssid", ssid, sizeof ssid)) {
+    int fallbacks = 0;
+    for (int i = 1; i < WIFI_NETS; i++) {
+        char ks[8], kp[8];
+        slot_keys(i, ks, kp);
+        if (load(ks, nets[i].ssid, sizeof nets[i].ssid)) {
+            load(kp, nets[i].pass, sizeof nets[i].pass);
+        }
+        fallbacks += nets[i].ssid[0] != 0;
+    }
+    ESP_ERROR_CHECK(esp_netif_init());                 // before the early return: stream, sched and web use lwIP either way
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    if (!load("ssid", nets[0].ssid, sizeof nets[0].ssid)) {
         ESP_LOGI(TAG, "no wifi configured, send: wifi <ssid> <password>");
         return;
     }
-    load("pass", pass, sizeof pass);
-    if (load("ssid2", ssid2, sizeof ssid2)) {
-        load("pass2", pass2, sizeof pass2);
-    }
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    load("pass", nets[0].pass, sizeof nets[0].pass);
     esp_netif_create_default_wifi_sta();
     wifi_init_config_t wic = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wic));
@@ -338,7 +456,7 @@ void net_init(QueueHandle_t q)
     apply_wifi(0);
     ESP_ERROR_CHECK(esp_wifi_start());
     esp_wifi_set_ps(WIFI_PS_NONE);          // mains powered: no modem sleep, so keepalives and commands are never late
-    ESP_LOGI(TAG, "id %s, fallback network %s, mqtt %s", id, ssid2[0] ? ssid2 : "none", mqtt_url[0] ? mqtt_url : "not configured");
+    ESP_LOGI(TAG, "id %s, %d fallback networks, mqtt %s", id, fallbacks, mqtt_url[0] ? mqtt_url : "not configured");
 }
 
 bool net_mqtt_connected(void)
@@ -353,12 +471,12 @@ const char *net_ip(void)
 
 void net_status(char *out, size_t n)
 {
-    if (!ssid[0]) {
+    if (!nets[0].ssid[0]) {
         snprintf(out, n, "wifi not configured");
     } else if (!wifi_up) {
-        snprintf(out, n, "wifi %s connecting", which ? ssid2 : ssid);
+        snprintf(out, n, "wifi %s connecting", nets[which].ssid);
     } else {
-        snprintf(out, n, "wifi %s ip %s, mqtt %s", which ? ssid2 : ssid, ip,
+        snprintf(out, n, "wifi %s ip %s, mqtt %s", nets[which].ssid, ip,
                  !mqtt_url[0] ? "not configured" : mqtt_up ? "connected" : "connecting");
     }
 }
