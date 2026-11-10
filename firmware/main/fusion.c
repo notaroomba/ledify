@@ -35,7 +35,15 @@ static float held_h, ep_v, ep_vmax;         // a break in the hold: the height b
 static float cal_acc[3];
 static bool kick_armed = true;
 // Height filter: ALT_W is the crossover in rad/s; below it the barometer wins, above it the accelerometer.
-#define ALT_W 0.8f
+// While it moves the barometer gets a fast crossover (2 rad/s): the accelerometer's vertical offset changes with how
+// the board is held (about 0.03 g on the board while held up), and a slower crossover lets that through as overshoot
+// (12 cm at 0.8 rad/s, 3.5 cm at 2 in the host test). Once it rests, a slow one (0.8) averages the barometer's noise.
+#ifndef ALT_W
+#define ALT_W 2.0f
+#endif
+#define ALT_W_REST 0.8f
+static float settle_sum;                    // the barometer's height over the last 2 s before a hold freezes it
+static int settle_n;
 static float h_ref;                         // barometric altitude of height 0, m
 static bool h_have;
 static int h_warm;                          // barometer readings seen before height starts
@@ -303,7 +311,6 @@ void fusion_baro(float pa, float dt)
         return;
     }
     dt = dt > 0.5f ? 0.5f : dt;
-    float err = (alt - h_ref) - s.height;
     if (h_have && ++h_age > 15 * 20) {          // called at 20 Hz
         boot_zero = false;
     }
@@ -312,6 +319,18 @@ void fusion_baro(float pa, float dt)
         s.height = 0;                            // reference alone can sit a few cm off on barometer noise)
         boot_zero = false;
     }
+    if (s.hold && quiet_n > 2 * FUSION_HZ && quiet_n <= 4 * FUSION_HZ) {
+        settle_sum += alt - h_ref;               // still settling: the board has been still 2 s, average what it reads
+        settle_n++;
+    } else if (s.hold && quiet_n > 4 * FUSION_HZ && settle_n) {
+        s.height = settle_sum / settle_n;        // freeze on 2 s of barometer average, not on one filter value
+        settle_sum = 0;
+        settle_n = 0;
+    } else if (!s.hold) {
+        settle_sum = 0;
+        settle_n = 0;
+    }
+    float err = (alt - h_ref) - s.height;
     if (s.hold && quiet_n > 4 * FUSION_HZ) {
         // Resting (the IMU has seen no movement for 4 s: the first 3 s of a rest still let the barometer finish
         // settling the height after a move): the board isn't changing height, so whatever the
@@ -322,9 +341,10 @@ void fusion_baro(float pa, float dt)
         s.vz = 0;
         return;
     }
-    s.height += 3 * ALT_W * err * dt;            // poles all at -ALT_W: no overshoot
-    s.vz += 3 * ALT_W * ALT_W * err * dt;
-    acc_off -= ALT_W * ALT_W * ALT_W * err * dt;
+    float w = quiet_n > FUSION_HZ / 4 ? ALT_W_REST : ALT_W;   // slow again a quarter second after the movement stops
+    s.height += 3 * w * err * dt;                // poles all at -w: no overshoot
+    s.vz += 3 * w * w * err * dt;
+    acc_off -= w * w * w * err * dt;
 }
 
 void fusion_zero_height(void)

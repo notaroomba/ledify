@@ -164,7 +164,9 @@ int main(void)
     }
     printf("height (0.5 Pa baro noise, 0.02 g accel offset): worst error while moving %.1f cm, while held %.1f cm; at 50 cm reads %.1f\n",
            worst_move * 100, worst_still * 100, m.height * 100);
-    assert(worst_move < 0.05f && worst_still < 0.03f && fabsf(m.height - 0.5f) < 0.02f);
+    // (the fast crossover while moving, against accelerometer offsets, lets more barometer noise through in the seconds
+    // before a rest freezes the height; the frozen value is a 2 s barometer average)
+    assert(worst_move < 0.06f && worst_still < 0.05f && fabsf(m.height - 0.5f) < 0.015f);
 
     // Pressure creeping 1.5 Pa a minute (as measured on the board after a restart) while it sits still for 3 minutes:
     // height stays put; then a 30 cm lift still reads 30 cm.
@@ -231,6 +233,28 @@ int main(void)
     }
     printf("button held 3 s, barometer nudged 6 cm: hold released %d, height %+.1f cm from before\n", released, (m.height - h0) * 100);
     assert(released && fabsf(m.height - h0) < 0.01f);
+
+    // Held up by hand: lifted 55 cm, tilted about while held, and the accelerometer reading 0.03 g high meanwhile (its
+    // offset depends on how the board is turned; on the board this showed as height overshooting the barometer by 11 cm
+    // with vz stuck at 0.4 m/s). Then put back down.
+    up[0] = 0; up[1] = 0; up[2] = 1;
+    fusion_reset();
+    float top_err = 0, end_err = 0, base_pa = 101070;
+    for (k = 0; k < 30 * FUSION_HZ; k++) {
+        float t = k * DT, d = 0, a = 0, Tl = 1, D = 0.55f;
+        if (t >= 8 && t < 9) { d = D * (1 - cosf(PI * (t - 8) / Tl)) / 2; a = D / 2 * (PI / Tl) * (PI / Tl) * cosf(PI * (t - 8) / Tl); }
+        else if (t >= 9 && t < 14) d = D;
+        else if (t >= 14 && t < 15) { d = D - D * (1 - cosf(PI * (t - 14) / Tl)) / 2; a = -D / 2 * (PI / Tl) * (PI / Tl) * cosf(PI * (t - 14) / Tl); }
+        bool held = t > 8 && t < 15;
+        float ww[3] = {held ? 12 * cosf(0.6f * (t - 8)) : 0, 0, 0};
+        float lin[3] = {0, 0, a / 9.80665f + (held ? 0.03f : 0) + 0.02f};
+        step(ww, lin);
+        if (k % 10 == 0) fusion_baro(base_pa - d * 11.95f + 0.3f * gauss(), 0.05f);
+        if (t > 9.5f && t < 14) top_err = fmaxf(top_err, fabsf(m.height - d));
+        if (t > 22) end_err = fmaxf(end_err, fabsf(m.height));
+    }
+    printf("held up 55 cm with a 0.03 g accelerometer offset: worst error up there %.1f cm, back down %.1f cm\n", top_err * 100, end_err * 100);
+    assert(top_err < 0.05f && end_err < 0.02f);
 
     // Boot at rest with a noisy barometer (1.5 Pa, worse than the board shows): height settles at exactly 0.
     float worst_boot = 0;
