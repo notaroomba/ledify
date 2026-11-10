@@ -23,6 +23,8 @@ A super small addressable LED controller with USB-C PD up to 100W, a switchable 
   <a href="#license">License</a>
 </p>
 
+<img src="ledify.png" alt="Ledify board" width="800"/>
+
 <img src="assets/render_final.png" alt="Ledify Render" width="800"/>
 
 ## Key Features
