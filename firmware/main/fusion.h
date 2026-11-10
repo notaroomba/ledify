@@ -30,6 +30,9 @@ typedef struct motion_snap {
     bool have_height;     // the barometer is feeding fusion_baro()
     float height;         // metres above where height was last zeroed (barometer + accelerometer)
     float vz;             // vertical speed, m/s
+    float baro_pa;        // diagnostics: the last pressure reading,
+    float baro_h;         // the barometer's own height above height 0 (m, before fusion),
+    float acc_off;        // and the learnt vertical accelerometer offset (m/s^2)
 } motion_snap_t;
 
 #define FUSION_HZ 200

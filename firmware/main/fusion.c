@@ -244,6 +244,9 @@ void fusion_baro(float pa, float dt)
         return;
     }
     float alt = 44330.0f * (1 - powf(pa / 101325.0f, 0.190295f));
+    s.baro_pa = pa;
+    s.baro_h = h_have ? alt - h_ref : 0;
+    s.acc_off = acc_off;
     if (!h_have) {                               // settle, then average a reference rather than trust one reading
         if (++h_warm > H_SKIP) {
             h_sum += alt;
