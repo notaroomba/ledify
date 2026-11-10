@@ -20,7 +20,7 @@ I also added the lesbian flag to the built in gradients as 7 hard stripes
 
 ![image](assets/journal/lesbian_gradient.jpeg)
 
-None of the sound stuff has been flashed onto a board yet so thats next.
+So by the end of this I have 4 boards that are completely done and I got sound working on them!!
 
 # 11/09/2026 8 PM - Second Board, Mic and Wi-Fi Fallbacks
 
