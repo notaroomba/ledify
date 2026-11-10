@@ -2,11 +2,13 @@
 #include <stdio.h>
 #include "stream.h"
 #include "leds.h"
+#include "matrix.h"
 #include "board.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "lwip/sockets.h"
 
 static const char *TAG = "stream";
@@ -16,6 +18,8 @@ static char src[32];
 static int max_u;                        // highest sACN universe seen in this run: a frame is complete when it lands
 static int64_t fps_at;
 static int fps_count, fps;
+static matrix_t mtx;
+static SemaphoreHandle_t img_lock;      // pictures come from the MQTT task and the web server's: one at a time
 
 #define PX_PER_UNIVERSE 170
 
@@ -81,6 +85,30 @@ static void e131(const uint8_t *b, int len)
     }
 }
 
+void stream_set_matrix(int w, int h, int lay)
+{
+    mtx = (matrix_t){ .w = w > 0 && h > 0 ? w : 0, .h = w > 0 && h > 0 ? h : 0, .lay = lay };
+}
+
+bool stream_image(const char *from, const uint8_t *b, int len)
+{
+    static uint8_t px[MAX_LEDS][3];
+    int w, h;
+    const uint8_t *rgb;
+    if (!matrix_parse(b, len, &w, &h, &rgb)) {
+        return false;
+    }
+    if (!img_lock || xSemaphoreTake(img_lock, 0) != pdTRUE) {         // another source is mid-picture: drop this one
+        return true;
+    }
+    int n = matrix_blit(&mtx, rgb, w, h, px, leds_get_count());
+    leds_stream_pixels(0, (const uint8_t *)px, n);
+    strlcpy(src, from, sizeof src);
+    got_frame();
+    xSemaphoreGive(img_lock);
+    return true;
+}
+
 static void stream_task(void *arg)
 {
     static uint8_t buf[1500];
@@ -127,6 +155,7 @@ static int udp(int port)
 
 void stream_init(void)
 {
+    img_lock = xSemaphoreCreateMutex();
     sock_ddp = udp(STREAM_PORT_DDP);
     sock_e131 = udp(STREAM_PORT_E131);
     xTaskCreate(stream_task, "stream", 4096, NULL, 4, NULL);

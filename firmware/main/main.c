@@ -7,6 +7,8 @@
 //   color solid|rainbow|temp|spectrum|meter|eq|...|slosh | bright level|sound | overlay none|vu|pulse | auto on|off
 //   motion [N|cal|zero|hzero] | axis 0-5 | hstep CM IMU: snapshot (or print it N s), recalibrate, level here,
 //                                                  height 0 here; strip axis; cm per colour step of the height style
+//   matrix W H [serp|prog] [rows|cols] [tl|tr|bl|br] | matrix off   the strip is a W x H LED matrix wired like so
+//                                                  (pictures from the panel land on it, see stream.c and matrix.h)
 //   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
 //   temp 21.5                                      feed a temperature in for the temp colour
 //   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 yes | status | pd | net | help
@@ -44,6 +46,7 @@
 #include "sensors.h"
 #include "mic.h"
 #include "motion.h"
+#include "matrix.h"
 #include "ble.h"
 #include "net.h"
 #include "ota.h"
@@ -179,8 +182,9 @@ static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
 static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60, predict = 1, axis, hstep = 10;
+static int16_t mw, mh, mlay = MATRIX_SERP;   // LED matrix: width, height (0 = none) and wiring, see matrix.h
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, S_AXIS, S_HSTEP, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, S_AXIS, S_HSTEP, S_MW, S_MH, S_MLAY, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -199,6 +203,9 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"predict", &predict, 0, 1},             // 1 = once the tempo is steady, light beats on time from the tempo tracker
     {"axis", &axis, 0, 5},                   // board axis along the strip for the motion styles: +x +y +z -x -y -z
     {"hstep", &hstep, 1, 500},               // height style: centimetres per colour step
+    {"mw", &mw, 0, 255},                     // LED matrix width in pixels, 0 = the strip is not a matrix
+    {"mh", &mh, 0, 255},                     // LED matrix height
+    {"mlay", &mlay, 0, 15},                  // matrix wiring: MATRIX_SERP | MATRIX_COLS | MATRIX_RIGHT | MATRIX_BOTTOM
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -526,6 +533,7 @@ static bool set_setting(int i, int v)
     mic_set_predict(predict);
     motion_set_axis(axis);
     leds_set_hstep(hstep);
+    stream_set_matrix(mw, mh, mlay);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -1213,11 +1221,52 @@ static void handle(char *line)
         } else {
             reply("err pair: only over USB, Bluetooth or the board's own page");
         }
+    } else if (!strcmp(tok[0], "matrix")) {                   // matrix W H [serp|prog] [rows|cols] [tl|tr|bl|br] | off
+        if (n == 1) {
+            snprintf(out, sizeof out, "{\"w\":%d,\"h\":%d,\"lay\":%d}", mw, mh, mlay);
+            reply(out);
+            return;
+        }
+        if (n == 2 && !strcmp(tok[1], "off")) {
+            set_setting(S_MW, 0);
+            set_setting(S_MH, 0);
+            reply("ok");
+            return;
+        }
+        int w = n >= 3 ? atoi(tok[1]) : 0, h = n >= 3 ? atoi(tok[2]) : 0, lay = MATRIX_SERP;
+        if (w < 1 || h < 1 || w > 255 || h > 255 || w * h > MAX_LEDS) {
+            snprintf(out, sizeof out, "err matrix W H [serp|prog] [rows|cols] [tl|tr|bl|br], W x H up to %d", MAX_LEDS);
+            reply(out);
+            return;
+        }
+        for (int i = 3; i < n; i++) {
+            const char *o = tok[i];
+            if (!strcmp(o, "serp")) lay |= MATRIX_SERP;
+            else if (!strcmp(o, "prog")) lay &= ~MATRIX_SERP;
+            else if (!strcmp(o, "rows")) lay &= ~MATRIX_COLS;
+            else if (!strcmp(o, "cols")) lay |= MATRIX_COLS;
+            else if (strlen(o) == 2 && (o[0] == 't' || o[0] == 'b') && (o[1] == 'l' || o[1] == 'r')) {
+                lay = (lay & (MATRIX_SERP | MATRIX_COLS)) | (o[0] == 'b' ? MATRIX_BOTTOM : 0) | (o[1] == 'r' ? MATRIX_RIGHT : 0);
+            } else {
+                reply("err matrix W H [serp|prog] [rows|cols] [tl|tr|bl|br]");
+                return;
+            }
+        }
+        set_setting(S_MW, w);
+        set_setting(S_MH, h);
+        set_setting(S_MLAY, lay);
+        if (leds_get_count() < w * h) {                          // the strip has to reach the last pixel
+            leds_set_count(w * h);
+            snprintf(out, sizeof out, "ok, count %d", w * h);
+            reply(out);
+        } else {
+            reply("ok");
+        }
     } else if (!strcmp(tok[0], "help")) {
         reply("on off blink<n> rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
               "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> scroll<px/s> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
-              "name<host> pair live<s> mic<s> motion<|s|cal|zero|hzero> axis<0-5> hstep<cm> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
+              "name<host> pair live<s> mic<s> motion<|s|cal|zero|hzero> axis<0-5> hstep<cm> matrix<w h [serp|prog] [rows|cols] [tl|tr|bl|br]|off> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -1282,6 +1331,7 @@ void app_main(void)
     leds_set_react(react);
     leds_set_hstep(hstep);
     mic_set_predict(predict);
+    stream_set_matrix(mw, mh, mlay);
     pd_set_max_mv(pdmax);
     boot_bookkeeping();                     // may lower it again for a safe boot
     ESP_LOGI(TAG, "boot %lu, reset %s%s; earlier: %s | %s | %s", (unsigned long)boots, reset_name(), safe_boot ? ", SAFE 5 V (last two boots died early)" : "", boot_log[1], boot_log[2], boot_log[3]);

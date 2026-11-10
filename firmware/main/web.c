@@ -5,6 +5,8 @@
 #include "web.h"
 #include "net.h"
 #include "cmd.h"
+#include "board.h"
+#include "stream.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_mac.h"
@@ -131,11 +133,23 @@ static esp_err_t h_ws(httpd_req_t *req)
         drop(fd);
         return ESP_OK;
     }
-    if (f.type != HTTPD_WS_TYPE_TEXT || !f.len) {
+    if ((f.type != HTTPD_WS_TYPE_TEXT && f.type != HTTPD_WS_TYPE_BINARY) || !f.len) {
         return ESP_OK;
     }
     if (!is_client(fd)) {                                            // only sockets that passed the origin check
         return ESP_FAIL;
+    }
+    if (f.type == HTTPD_WS_TYPE_BINARY) {                            // a picture for the matrix (see matrix.h)
+        static uint8_t img[FRAME_MAX_BYTES];                         // the server runs one handler at a time
+        if (f.len > sizeof img) {
+            return ESP_FAIL;                                         // too big to be a frame: drop the socket
+        }
+        f.payload = img;
+        if (httpd_ws_recv_frame(req, &f, f.len) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        stream_image("panel", img, f.len);
+        return ESP_OK;
     }
     cmd_t c = { .src = CMD_SRC_WS };
     uint8_t buf[sizeof c.text];

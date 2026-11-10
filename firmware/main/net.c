@@ -43,7 +43,7 @@ static char ip[16];
 static bool wifi_up, mqtt_up;
 static esp_mqtt_client_handle_t mqtt;
 static char prefix[32];                   // ledify/ID/
-static char t_cmd[48], t_set[48], t_any[48], t_pair[48], t_live[48], t_reply[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
+static char t_cmd[48], t_set[48], t_any[48], t_frame[48], t_pair[48], t_live[48], t_reply[48], t_lstate[48], t_state[48], t_sensors[48], t_avail[48];
 
 static bool load(const char *key, char *buf, size_t n)
 {
@@ -309,8 +309,10 @@ static void mqtt_event(void *arg, esp_event_base_t base, int32_t event_id, void 
         ESP_LOGW(TAG, "mqtt disconnected");
         break;
     case MQTT_EVENT_DATA:
-        if (ev->total_data_len == ev->data_len) {    // small payloads only; we never need more
-            if (is_topic(ev, t_cmd) || is_topic(ev, t_set)) {
+        if (ev->total_data_len == ev->data_len) {    // whole messages only: the buffer fits the largest pixel frame
+            if (is_topic(ev, t_frame)) {             // a picture from the panel (binary): straight to the stream
+                stream_image("broker", (const uint8_t *)ev->data, ev->data_len);
+            } else if (is_topic(ev, t_cmd) || is_topic(ev, t_set)) {
                 queue_cmd(ev->data, ev->data_len);
             } else if (set_key(ev, key, sizeof key)) {   // a slider sends a bare number, maybe "300.0"
                 queue_prefixed(key, ev->data, ev->data_len);
@@ -335,6 +337,7 @@ static void mqtt_start(void)
         .credentials.client_id = id,
         .session.last_will = { .topic = t_avail, .msg = "offline", .qos = 1, .retain = true },
         .session.keepalive = 30,
+        .buffer.size = MQTT_BUF_SIZE,                                      // a whole pixel frame in one piece
     };
     mqtt = esp_mqtt_client_init(&mc);
     esp_mqtt_client_register_event(mqtt, ESP_EVENT_ANY_ID, mqtt_event, NULL);
@@ -386,6 +389,7 @@ void net_init(QueueHandle_t q)
     snprintf(t_cmd, sizeof t_cmd, "%scmd", prefix);
     snprintf(t_set, sizeof t_set, "%slight/set", prefix);
     snprintf(t_any, sizeof t_any, "%s+/set", prefix);
+    snprintf(t_frame, sizeof t_frame, "%sframe/set", prefix);
     snprintf(t_pair, sizeof t_pair, "%spair", prefix);
     snprintf(t_live, sizeof t_live, "%slive", prefix);
     snprintf(t_reply, sizeof t_reply, "%sreply", prefix);

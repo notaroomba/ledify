@@ -45,3 +45,5 @@
 #define STREAM_TIMEOUT_MS 2500  // no DDP/E1.31 frame for this long: back to the normal styles
 #define STREAM_PORT_DDP  4048
 #define STREAM_PORT_E131 5568
+#define FRAME_MAX_BYTES (4 + MAX_LEDS * 3)   // a picture from the panel: "LM" w h, then RGB for every pixel
+#define MQTT_BUF_SIZE (FRAME_MAX_BYTES + 128) // MQTT receive buffer: the largest frame plus its topic and header

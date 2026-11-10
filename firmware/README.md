@@ -13,6 +13,8 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/fx.c` | The whole-strip sound styles (`eq`, `ripple`, `mirror`, `chroma`, `flow`) and motion styles (`bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`), plain C (`test/fx_test.c` checks them on the host) |
 | `main/fusion.c` | IMU calibration, sensor fusion and barometric height for the motion styles, plain C (`test/fusion_test.c` checks it on the host) |
 | `main/motion.c` | Reads the BMI323 at 200 Hz and the BMP581 at 20 Hz in its own task and runs the fusion |
+| `main/matrix.c` | LED matrix wiring (size, zig-zag or not, rows or columns, first pixel) and drawing the panel's pictures onto it, plain C (`test/matrix_test.c` checks it on the host) |
+| `main/stream.c` | Pixel streams: DDP and E1.31 on the LAN, and pictures from the web panel |
 | `main/fft.c` | 256-point fixed-point FFT and the band sums, plain C (`test/fft_test.c` checks it on the host) |
 | `main/ble.c` | Nordic UART service on NimBLE |
 | `main/net.c` | Wi-Fi station (primary + fallback network), MQTT client, Home Assistant discovery |
@@ -87,6 +89,7 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `mic [N]` | Print the microphone level on the USB console 4 times a second for N seconds (default 10, 0 stops): the loudest 8 ms block as dBFS and approximate dB SPL, the raw 24-bit min/max/mean, and a bar. A quiet room should sit around -60 to -70 dBFS and a clap should jump 30 dB or more. All zeros or a fixed value means no data from the mic |
 | `motion [N\|cal\|zero\|hzero]` | The IMU: alone, a JSON snapshot (calibration state, tilt, heading, energy, gyro bias, height); `motion N` prints it on the USB console 4 times a second for N seconds; `motion cal` calibrates again (hold the board still for a second); `motion zero` makes the way the board sits now count as level and resets the heading; `motion hzero` makes the current height 0 |
 | `hstep CM` | The `height` style's colour step, 1-500 cm, default 10. Saved |
+| `matrix W H [serp\|prog] [rows\|cols] [tl\|tr\|bl\|br]` | The strip is a W x H LED matrix (up to 1000 pixels): `serp` (default) if every other row runs back the other way, `prog` if every row starts at the same side; `rows` (default) if the strip runs along rows, `cols` if down columns; and the corner of the first pixel as seen from the front (default `tl`). Raises `count` to W x H if it is lower. `matrix` alone shows it, `matrix off` makes it a plain strip again. Saved; `status` reports `mw`, `mh` and `mlay` (see [LED matrix](#led-matrix-video-screen-camera)) |
 | `axis N` | Which board axis the strip runs along, for the motion styles: 0 +x, 1 +y, 2 +z, 3 -x, 4 -y, 5 -z, default 0. Saved |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |
 | `audio L B M T P [SPEC]` | Feed loudness, bass, mid, treble and pulse (0-255) from outside, and optionally the 16-band spectrum as 32 hex digits; overrides the microphone for 1 s per packet. Without SPEC the three bands are spread over the spectrum |
@@ -201,8 +204,8 @@ linearly, at `tmax` the strip is dark, and the panel says so.
 **Local panel, no cloud.** With Wi-Fi up the board announces itself over mDNS and serves the same panel at
 `http://ledify.local/` (the `name` setting) from its own flash; that page talks to the board over a WebSocket on
 the LAN, so it works with the internet down. The hosted panel shows the link. The WebSocket carries the MQTT
-payloads as text frames (`state {...}`, `live {...}`, `reply ok`, no binary frames) and takes
-command lines back. Only the board's own page may open it: the `Host` must be `NAME.local`, `NAME` or the board's IP
+payloads as text frames (`state {...}`, `live {...}`, `reply ok`, nothing binary) and takes
+command lines back, plus binary frames from the panel that are pictures for the matrix (pixels only). Only the board's own page may open it: the `Host` must be `NAME.local`, `NAME` or the board's IP
 and a browser's `Origin` must match, so another website open on the same network can't drive the board or listen
 to the mic.
 
@@ -257,6 +260,36 @@ Setting it up on Railway (accounts stay off, and everything works as before, unt
 **Install and demo.** The hosted panel is a PWA: "Add to Home Screen" on a phone gives it an icon and a standalone
 window. `https://.../?demo` runs it against a pretend board for trying the controls without hardware.
 
+## LED matrix: video, screen, camera
+
+A strip laid out as a grid (a 16 x 16 WS2812 panel, or a strip zig-zagged into rows) can show pictures. Tell the
+board how it is wired with `matrix W H ...` or in the panel's **Matrix** lens (size, first pixel, along rows or down
+columns, zig-zag), which draws the strip's path through the grid and then shows a test pattern: red along the top,
+green down the left side, white in the top left corner, blue on the diagonal. If it looks turned or mirrored, change
+the first pixel or the direction until it doesn't.
+
+The same lens plays a video or picture file (animated GIFs too), a screen or browser tab, the camera, or scrolling
+text. The browser scales each frame to the matrix (cropped to fill, whole with black bars, or stretched), applies a
+brightness and a gamma curve (LEDs are linear and video is not, so without it pictures look washed out) and sends the
+pixels; `matrix.c` puts each one where the wiring says. A picture of another size is scaled to the matrix (nearest
+pixel); with no matrix set it is laid along the strip row by row. Frames are shown like a LAN stream: instantly,
+through `level`, the power cap and the thermal limit, and `STREAM_TIMEOUT_MS` (2.5 s) after the last one the strip
+goes back to its effect. A video's sound plays only on the device that plays it; nothing audio goes to the board, and
+nothing but pixels comes from it.
+
+How frames travel, and what to expect:
+
+| Where the panel is open | Path | Frame rate |
+| --- | --- | --- |
+| The board's own page, `http://NAME.local` | Binary frames on its WebSocket, on the LAN | 30 fps (a 1000-pixel frame is 3 KB and 30 ms on the wire) |
+| The hosted panel | MQTT over the broker, `ledify/<id>/frame/set`, QoS 0 | About 10 to 15 fps and 100 to 300 ms behind, more on a phone hotspot; 12 fps is the default. A 16 x 16 frame is 772 bytes, about 9 KB/s at 12 fps |
+| LedFx, xLights, Hyperion on the LAN | DDP or E1.31 (above) | As fast as the tool sends; these do their own matrix mapping and send pixels in strip order |
+
+The panel never queues frames: if the previous one is still on its way the next is skipped (the lens shows how many),
+so a slow link means fewer frames rather than ever later ones. Only browsers linked to the board may publish to its
+`frame/set` (the server's broker roles), and the board's WebSocket only takes them from its own page. A hidden tab is
+throttled to about a frame a second by the browser, so keep the panel in front while streaming.
+
 ## Updating over the air
 
 Flash with the cable once to get the two-slot partition table; after that `ota URL` from the console, BLE or `ledify/<id>/cmd` pulls `ledify.bin` over Wi-Fi into the other slot, verifies it and restarts. `status` shows the running version as `fw` (the git describe of the build). The bootloader boots the new image on trial: if the board does not stay up for 30 s (`ota_mark_ok()` in `main.c`) the next reset falls back to the previous image, so a bad build never bricks it. The Wi-Fi radio never modem-sleeps, so commands and MQTT keepalives are not delayed.
@@ -282,6 +315,7 @@ The board id is `ledify_` plus the last three bytes of its MAC, e.g. `ledify_d3e
 | `ledify/<id>/cmd` | in | Any text command from the table above |
 | `ledify/<id>/light/set` | in | Home Assistant JSON light: `{"state":"ON","brightness":128,"color":{"r":255,"g":0,"b":0},"effect":"rainbow"}` |
 | `ledify/<id>/KEY/set` | in | A bare value, run as the command `KEY value`. The Home Assistant entities use `count`, `type`, `auto` (`ON`/`OFF`), `gain`, `lux_lo`, `lux_hi`, `night`, `temp_lo`, `temp_hi`; `temp` feeds a temperature in for the `temp` colour |
+| `ledify/<id>/frame/set` | in | Binary: a picture for the matrix, `LM`, width, height, then width x height RGB bytes (see [LED matrix](#led-matrix-video-screen-camera)) |
 | `ledify/<id>/audio/set` | in | `L B M T P` from the web panel's audio analysis (file or microphone) |
 | `ledify/<id>/reply` | out | The text reply to the last command (`ok`, `err ...`), what the console and BLE see |
 | `ledify/<id>/live` | out | `{"loud","bands","pulse","db","cap"}` at 10 Hz while a `live` lease is active |
