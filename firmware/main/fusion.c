@@ -28,6 +28,9 @@ static float sm_dev[3], sm_an = 1;          // rest detector input, smoothed ove
 static float hold_l, hold_w;                // height hold inputs, smoothed the same way
 static float acc_lp[3] = {0, 0, 1};         // the accelerometer over the last ~0.5 s: a hold judges the change from it
 static int quiet_n;                         // samples in a row the board hasn't been moved
+static bool was_hold;
+static float held_h, ep_v, ep_vmax;         // a break in the hold: the height before it, and the fastest the
+#define JIGGLE_MS 0.05f                     // accelerometer alone saw it go; under this (m/s) it wasn't lifted
 static float cal_acc[3];
 static bool kick_armed = true;
 // Height filter: ALT_W is the crossover in rad/s; below it the barometer wins, above it the accelerometer.
@@ -89,6 +92,8 @@ void fusion_reset(void)
     memset(&s, 0, sizeof s);
     s.kicks = kicks;
     h_have = s.have_height = false;
+    was_hold = false;
+    ep_vmax = 1;
     h_warm = 0;
     h_sum = 0;
     acc_off = 0;
@@ -252,7 +257,23 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
         if (s.hold) {
             s.vz = 0;                            // resting: it isn't climbing, whatever the integral says
         }
+        // A break in the hold (a button pressed, a knock, the board nudged): the accelerometer on its own says how
+        // fast it really moved. If it never reached JIGGLE_MS (10 cm in a second peaks at 0.16 m/s), it wasn't lifted,
+        // and whatever the barometer did meanwhile (a finger near its vent, noise) is undone once it rests again.
+        if (!s.hold) {
+            if (was_hold) {
+                held_h = s.height;
+                ep_v = ep_vmax = 0;
+            }
+            ep_v += az * dt;
+            ep_vmax = fmaxf(ep_vmax, fabsf(ep_v));
+        } else if (!was_hold && ep_vmax < JIGGLE_MS) {
+            h_ref += s.height - held_h;
+            s.height = held_h;
+            quiet_n = 4 * FUSION_HZ + 1;         // and no settling window: nothing moved to settle
+        }
     }
+    was_hold = s.hold;
 }
 
 void fusion_baro(float pa, float dt)
@@ -294,6 +315,7 @@ void fusion_baro(float pa, float dt)
 
 void fusion_zero_height(void)
 {
+    held_h -= s.height;                          // a break in progress keeps its place relative to the new zero
     h_ref += s.height;
     s.height = 0;
     s.vz = 0;

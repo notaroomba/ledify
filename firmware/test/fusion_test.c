@@ -216,6 +216,22 @@ int main(void)
     assert(flips <= 6 && worst_creep < 0.03f);
     gyr_noise = 0.06f; acc_noise = 0.002f;
 
+    // Someone holds the board's button for 3 s: it is pushed about (0.05 g jolts, a few deg/s) without being lifted,
+    // and a finger near the vent nudges the barometer 6 cm high meanwhile. Once it rests, the height is as before.
+    h0 = m.height;
+    bool released = false;
+    for (k = 0; k < 10 * FUSION_HZ; k++) {
+        bool press = k > FUSION_HZ && k < 4 * FUSION_HZ;
+        float push[3] = {0.03f * sinf(k * 0.7f) * press, 0, 0.02f + 0.05f * sinf(k * 0.31f) * press};
+        float ww[3] = {4 * sinf(k * 0.2f) * press, 0, 0};
+        step(ww, push);
+        released |= !m.hold;
+        pa += 1.5f / 60 * DT;
+        if (k % 10 == 0) fusion_baro(pa - (press ? 0.06f * 11.95f : 0) + 0.5f * gauss(), 0.05f);
+    }
+    printf("button held 3 s, barometer nudged 6 cm: hold released %d, height %+.1f cm from before\n", released, (m.height - h0) * 100);
+    assert(released && fabsf(m.height - h0) < 0.01f);
+
     puts("fusion ok");
     return 0;
 }
