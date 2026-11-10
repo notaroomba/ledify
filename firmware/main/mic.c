@@ -283,6 +283,8 @@ void mic_snapshot(mic_snap_t *s)
     }
     s->beats = beats + fed_beats;
     s->at = f ? fed_block_at : block_at;
+    s->bpm = mic_bpm();
+    s->lock = mic_lock();
 }
 
 // Diagnostics for "is any sound reaching the chip": the current block and the loudest block of the last minute.

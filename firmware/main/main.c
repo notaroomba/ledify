@@ -2,13 +2,15 @@
 //
 // Text commands (USB serial console, BLE UART app, or MQTT topic ledify/<id>/cmd):
 //   on | off | rgb R G B | level N | count N | type ws2812|ws2811|sk6812|sk6812w|ws2816
-//   mode solid|rainbow|temp|spectrum|meter|eq|ripple|mirror|chroma|flow|bubble|tilt|shake|spin|slosh|height|sound|vu|pulse|auto
+//   mode solid|rainbow|temp|spectrum|meter|eq|ripple|mirror|chroma|flow|bubble|tilt|shake|spin|slosh|height
+//        |aurora|fire|bounce|comet|sound|vu|pulse|auto
 //                                                  presets, the Home Assistant effects
 //   color solid|rainbow|temp|spectrum|meter|eq|...|slosh | bright level|sound | overlay none|vu|pulse | auto on|off
 //   motion [N|cal|zero|hzero] | axis 0-5 | hstep CM IMU: snapshot (or print it N s), recalibrate, level here,
 //                                                  height 0 here; strip axis; cm per colour step of the height style
 //   matrix W H [serp|prog] [rows|cols] [tl|tr|bl|br] | matrix off   the strip is a W x H LED matrix wired like so
 //                                                  (pictures from the panel land on it, see stream.c and matrix.h)
+//   fxpal 0|1                                      fused styles: their own colours, or the gradient (palette)
 //   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
 //   temp 21.5                                      feed a temperature in for the temp colour
 //   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 yes | status | pd | net | help
@@ -20,6 +22,7 @@
 //               | eq | ripple | mirror | chroma | flow (whole-strip sound styles, fx.c)
 //               | bubble | tilt | shake | spin | slosh | height (whole-strip motion styles, fx.c, from the IMU and
 //                 barometer via fusion.c)
+//               | aurora | fire | bounce | comet (fused styles, fx.c: sound and motion together)
 //   brightness  level, scaled by the lux curve when auto is on, by the microphone when bright is sound
 //   overlay     none | vu (lit length follows the sound) | pulse (flash on each beat, a quarter in between)
 #include <stdio.h>
@@ -62,10 +65,10 @@ static const char *TAG = "ledify";
 
 typedef enum { OVER_NONE, OVER_VU, OVER_PULSE } overlay_t;
 static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow",
-                                     "bubble", "tilt", "shake", "spin", "slosh", "height"};
-#define N_COLORS 18
+                                     "bubble", "tilt", "shake", "spin", "slosh", "height", "aurora", "fire", "bounce", "comet"};
+#define N_COLORS 22
 static const char *overlay_names[] = {"none", "vu", "pulse"};
-#define MODES "solid|rainbow|temp|spectrum|meter|palette|cover|eq|ripple|mirror|chroma|flow|bubble|tilt|shake|spin|slosh|height|sound|vu|pulse|auto"
+#define MODES "solid|rainbow|temp|spectrum|meter|palette|cover|eq|ripple|mirror|chroma|flow|bubble|tilt|shake|spin|slosh|height|aurora|fire|bounce|comet|sound|vu|pulse|auto"
 
 static leds_color_t color;
 static overlay_t overlay;
@@ -181,10 +184,10 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
-static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60, predict = 1, axis, hstep = 10;
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60, predict = 1, axis, hstep = 10, fxpal;
 static int16_t mw, mh, mlay = MATRIX_SERP;   // LED matrix: width, height (0 = none) and wiring, see matrix.h
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, S_AXIS, S_HSTEP, S_MW, S_MH, S_MLAY, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, S_AXIS, S_HSTEP, S_MW, S_MH, S_MLAY, S_FXPAL, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -206,6 +209,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"mw", &mw, 0, 255},                     // LED matrix width in pixels, 0 = the strip is not a matrix
     {"mh", &mh, 0, 255},                     // LED matrix height
     {"mlay", &mlay, 0, 15},                  // matrix wiring: MATRIX_SERP | MATRIX_COLS | MATRIX_RIGHT | MATRIX_BOTTOM
+    {"fxpal", &fxpal, 0, 1},                 // fused styles (aurora..comet): 1 = in the user's gradient
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -439,14 +443,14 @@ static int lookup(const char *name, const char *const *names, int n)
 
 static bool uses_mic(void)
 {
-    return sound_on || overlay != OVER_NONE || color == COLOR_SPECTRUM || LED_IS_SOUND(color);
+    return sound_on || overlay != OVER_NONE || color == COLOR_SPECTRUM || LED_IS_SOUND(color) || LED_IS_FUSED(color);
 }
 
 static bool have_imu;
 
 static bool uses_motion(void)
 {
-    return LED_IS_MOTION(color);
+    return LED_IS_MOTION(color) || LED_IS_FUSED(color);
 }
 
 static const char *mic_note(void)
@@ -534,6 +538,7 @@ static bool set_setting(int i, int v)
     motion_set_axis(axis);
     leds_set_hstep(hstep);
     stream_set_matrix(mw, mh, mlay);
+    leds_set_fxpal(fxpal);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -1330,6 +1335,7 @@ void app_main(void)
     leds_set_scroll(scroll);
     leds_set_react(react);
     leds_set_hstep(hstep);
+    leds_set_fxpal(fxpal);
     mic_set_predict(predict);
     stream_set_matrix(mw, mh, mlay);
     pd_set_max_mv(pdmax);

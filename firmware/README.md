@@ -10,7 +10,7 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/sensors.c` | OPT4001 light sensor (I2C), BMI323 IMU and BMP581 barometer (SPI) |
 | `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble and a 16-band spectrum |
 | `main/beat.c` | Tempo tracking and beat prediction: tempo by autocorrelation of the onset strength, phase by a comb, kept in step by each onset (`test/beat_test.c` checks it on the host) |
-| `main/fx.c` | The whole-strip sound styles (`eq`, `ripple`, `mirror`, `chroma`, `flow`) and motion styles (`bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`), plain C (`test/fx_test.c` checks them on the host) |
+| `main/fx.c` | The whole-strip sound styles (`eq`, `ripple`, `mirror`, `chroma`, `flow`), motion styles (`bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`) and fused sound + motion styles (`aurora`, `fire`, `bounce`, `comet`), plain C (`test/fx_test.c` checks them on the host) |
 | `main/fusion.c` | IMU calibration, sensor fusion and barometric height for the motion styles, plain C (`test/fusion_test.c` checks it on the host) |
 | `main/motion.c` | Reads the BMI323 at 200 Hz and the BMP581 at 20 Hz in its own task and runs the fusion |
 | `main/matrix.c` | LED matrix wiring (size, zig-zag or not, rows or columns, first pixel) and drawing the panel's pictures onto it, plain C (`test/matrix_test.c` checks it on the host) |
@@ -46,13 +46,14 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `level N` | Brightness cap, 0-255 |
 | `count N` | How many pixels are driven, 1-1000 (`MAX_LEDS`). Saved. Also a slider in Home Assistant |
 | `type ws2812` | Chip type: `ws2812` (also B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w` (RGBW), `ws2816`. Saved |
-| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
-| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `height` (see [Mixing styles](#mixing-styles)) |
+| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`, `aurora`, `fire`, `bounce`, `comet`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
+| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`, `aurora`, `fire`, `bounce`, `comet` (see [Mixing styles](#mixing-styles)) |
 | `bright level` / `bright sound` | Brightness source: the fixed `level`, or `level` scaled by the microphone |
 | `overlay none` / `vu` / `pulse` | Light only as many pixels as the sound level, or flash on beats |
 | `auto on` / `auto off` | Scale the brightness with the light sensor between `lux_lo` and `lux_hi`, off under `night` |
 | `gain N` | Microphone gain 1-100, default 25: how much a quiet room is amplified. Saved |
 | `predict 0\|1` | 1 (default): once the music has a steady tempo, beats are lit on time from the tempo tracker, early by the time the LEDs take, instead of after each one is heard. 0: every beat is a heard onset. Saved; `status` shows `bpm` and `lock` |
+| `fxpal 0\|1` | The fused styles (`aurora`, `fire`, `bounce`, `comet`): 0 (default) in their own colours, 1 in the user's gradient (`palette`). Saved |
 | `react N` | How fast the sound styles fall back after a sound, 1-100, default 60: the release runs from about 1 s at 1 to 40 ms at 100; the rise is always instant. Saved |
 | `lux LO HI` | Lux at which auto brightness sits at its floor and reaches full, default `0 500`. Saved; also one at a time as `lux_lo N` / `lux_hi N` |
 | `night N` | Lux below which auto brightness turns the strip off, 0 (default) disables. Saved |
@@ -119,8 +120,12 @@ Every frame is **colour × brightness × overlay**. `main.c` composes the three 
 | `spin` | A rainbow that stays put in the room: turn the board about the vertical and the colours slide along the strip, one turn for one rainbow; brighter the faster it turns |
 | `slosh` | Half the strip is liquid in the `rgb` colour: it runs to the lower end and sloshes (about 1 Hz, settling after a few rocks) when the board is pushed along the strip, frothing white at its edges |
 | `height` | Raise or lower the board and the whole strip changes colour every `hstep` cm (default 10) from where the style was switched on (or `motion hzero`): the `rgb` colour at 0, an eighth of the way round the colour wheel per step. Hysteresis of a fifth of a step (at least 3 cm) keeps it from flickering on a line; a faint dot runs along the strip as the board climbs through each step |
+| `aurora` | Fused: slow curtains of light in greens, teals and violets (or the gradient with `fxpal 1`). Two waves running opposite ways cross into folds and a slower one swells them; the room's loudness, followed over about a second, brightens and quickens them, each beat sends a soft swell and a shimmer on the crests, treble leans the colours violet, and the folds drift towards the lower end when the strip is tilted. Never fully dark between the folds |
+| `fire` | Fused: flames that always rise. They burn from whichever end the IMU says is down (from both ends when the strip lies within about 9° of level, with hysteresis; from pixel 0 without an IMU) and turn round with a 0.3 s crossfade when it is flipped. Loudness and shaking are the fuel (taller, wilder flames), a beat throws up a flare from the base. Heat colours black-red-yellow-white, or along the gradient with `fxpal 1` |
+| `bounce` | Fused: 2 to 5 glowing balls (by strip length) under real gravity from the tilt, as if the strip were 2 m long; they bounce off the ends, roll about when it lies flat, and every beat kicks them up again, higher the louder it is; a knock throws them all up and a shove along the strip sloshes them. Colours spread round the wheel and turn with the heading. Fast balls leave short trails |
+| `comet` | Fused: two comets swing along the strip from opposite ends and cross in the middle on every beat once the tempo tracker has locked (one swing per two beats, phase pulled onto each beat), with a white flash where they cross; before a lock they glide at a pace set by the loudness and a beat swells their heads. Their colours sit opposite on the wheel and turn as the board turns |
 
-The last eleven draw the whole strip at once and keep state between frames, so they don't go in a `seg` zone (zones on top of them still work). The sound and motion styles redraw at about 60 fps.
+The last fifteen draw the whole strip at once and keep state between frames, so they don't go in a `seg` zone (zones on top of them still work). The sound, motion and fused styles redraw at about 60 fps; the fused ones keep both the mic and the IMU running.
 
 | Brightness | What happens to `level` |
 | --- | --- |

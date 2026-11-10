@@ -25,10 +25,30 @@ static float liq_x, liq_v;                   // slosh: the liquid's centre -1..1
 static uint16_t hstep = 10;                  // height: cm per colour step
 static int h_band;                           // height: the step showing (with hysteresis)
 static float h_rgb[3];                       // height: the colour on the strip, easing to the step's
+// Fused styles (sound and motion together).
+static uint8_t user_lut[FX_PAL][3];          // the user's gradient, sampled
+static bool use_user;
+static uint8_t sin_t[256];                   // 128 + 127 sin, one turn over 256
+static fx_t last_k = FX_N;                   // the style drawn last frame: trails are cleared on a change
+static uint8_t trail[FX_MAX_LEDS][3];        // bounce, comet: what was drawn, fading
+static float amb;                            // loudness 0..1 on a slow (1.2 s) follower: the room's mood, not the beat
+static float au_p[3], au_drift, surge;       // aurora: phases of its three layers (turns), smoothed tilt, the beat swell
+static uint8_t fire_h[FX_MAX_LEDS];          // fire: heat along the flame, 0 at the base
+static uint8_t fire_snap[FX_MAX_LEDS][3];    // fire: the last frame before the flame turned round, faded out
+static int fire_dir = 2, fire_xf;            // fire: 1 base at pixel 0, -1 base at the far end, 0 both ends; crossfade /256
+static uint32_t fire_acc;                    // fire: ms not yet simulated
+static struct { float x, v; } balls[6];      // bounce: position 0..1 along the strip (0 = pixel 0), strips per second
+static float com_ph, com_prev[2], com_flash; // comet: phase in laps, last frame's positions (px), the beat flash
 
 void fx_set_hstep(uint16_t cm)
 {
     hstep = cm < 1 ? 1 : cm > 500 ? 500 : cm;
+}
+
+void fx_set_palette(const uint8_t lut[FX_PAL][3], bool on)
+{
+    memcpy(user_lut, lut, sizeof user_lut);
+    use_user = on;
 }
 
 void fx_set_react(uint8_t r)
@@ -428,6 +448,302 @@ static void height(const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt
     }
 }
 
+
+// ---- Fused styles: the mic and the IMU at once ----
+
+static uint8_t sin8(uint32_t x) { return sin_t[x & 255]; }
+
+// Colour at pos 0..255 of a list of nst stops, evenly spaced.
+static void lut_at(const uint8_t (*lut)[3], int nst, uint8_t pos, uint8_t *out)
+{
+    uint32_t x = (uint32_t)pos * (nst - 1);                       // in stops, 8.8
+    int k = x >> 8, k1 = k + 1 < nst ? k + 1 : k;
+    uint32_t f = x & 255;
+    for (int ch = 0; ch < 3; ch++) {
+        out[ch] = (lut[k][ch] * (256 - f) + lut[k1][ch] * f) >> 8;
+    }
+}
+
+// The style's own colours (own, or a rainbow when NULL), or the user's gradient when they asked for it.
+static void pick(const uint8_t (*own)[3], int nown, uint8_t pos, uint8_t *out)
+{
+    if (use_user) {
+        lut_at(user_lut, FX_PAL, pos, out);
+    } else if (own) {
+        lut_at(own, nown, pos, out);
+    } else {
+        hsv(pos, 255, out);
+    }
+}
+
+static void scale3(uint8_t *p, const uint8_t *c, uint32_t v)       // p = c x v/255
+{
+    for (int ch = 0; ch < 3; ch++) {
+        p[ch] = c[ch] * v / 255;
+    }
+}
+
+static bool have_imu(const motion_snap_t *m)
+{
+    return m->up[0] != 0 || m->up[1] != 0 || m->up[2] != 0;
+}
+
+static float wrapf(float x) { return x - floorf(x); }
+
+// Aurora: slow curtains of light in greens, teals and violets. Two waves running opposite ways along the strip cross into
+// moving folds, a third, slower one swells them; the room's loudness (slow) brightens and quickens them, each beat sends a
+// soft swell through, and they drift towards whichever end is lower. Quiet room: a calm, dim sky.
+static const uint8_t AURORA[5][3] = {{0, 255, 70}, {0, 220, 150}, {0, 130, 255}, {110, 40, 255}, {210, 0, 170}};
+static void aurora(const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt, bool beat)
+{
+    float h = dt / 1000.0f;
+    au_drift = ease_to(au_drift, clampf(m->tilt / 0.5f, -1, 1), 0.4f, dt);
+    float sp = 0.04f + 0.18f * amb;                               // turns per second of the folds
+    au_p[0] = wrapf(au_p[0] + (sp + 0.35f * au_drift) * h);       // + raised (drift > 0): the folds travel to pixel 0
+    au_p[1] = wrapf(au_p[1] + (sp * 1.6f - 0.2f * au_drift) * h);
+    au_p[2] = wrapf(au_p[2] + (0.015f + 0.05f * amb) * h);
+    if (beat) {
+        surge = 0.4f + 0.6f * (sm_loud >> 8) / 255.0f;
+    } else {
+        surge *= expf(-h / 0.35f);
+    }
+    uint32_t lev = (uint32_t)(130 + 95 * amb + 50 * surge);       // overall brightness 0..255
+    lev = lev > 255 ? 255 : lev;
+    uint32_t p0 = (uint32_t)(au_p[0] * 256), p1 = (uint32_t)(au_p[1] * 256), p2 = (uint32_t)(au_p[2] * 256);
+    uint32_t tint = (sm_bands[2] >> 8) / 4;                       // treble leans the colours to the violet end
+    uint32_t spark = (uint32_t)(surge * 90);
+    uint32_t floor_v = 18 + (uint32_t)(30 * amb);                 // the sky between the curtains never goes quite dark
+    for (int i = 0; i < n; i++) {
+        uint32_t x = (uint32_t)i * 256 / (uint32_t)n;             // 0..255 along the strip
+        uint32_t f = ((uint32_t)sin8(x * 3 + p0) + sin8(x * 5 - p1)) / 2;          // the folds, 0..255
+        uint32_t env = 90 + (sin8(x + p2 * 2) * 165 >> 8);                         // and their swell
+        uint32_t v = f > 70 ? (f - 70) * 255 / 185 : 0;                            // folds stand out from the sky
+        v = gam(v) * env >> 8;
+        v = floor_v + v * (255 - floor_v) / 255;
+        uint32_t pos = (sin8(x * 2 - p2 * 3) * 3 >> 2) + tint;
+        uint8_t c[3];
+        pick(use_user ? NULL : AURORA, 5, pos > 255 ? 255 : pos, c);
+        scale3(out[i], c, v * lev / 255);
+        if (spark && f > 215) {                                   // a beat makes the crests shimmer
+            uint8_t w = (uint8_t)(spark * (f - 215) / 40);
+            uint8_t wc[3] = {w, w, w};
+            add(out[i], wc);
+        }
+    }
+}
+
+// Heat 0..255 as a flame colour: black, red, orange, yellow, white; or along the user's gradient, dark when cool.
+static void heat_rgb(uint8_t h, uint8_t *p)
+{
+    if (use_user) {
+        uint8_t c[3];
+        lut_at(user_lut, FX_PAL, h, c);
+        scale3(p, c, h < 85 ? h * 3 : 255);
+        return;
+    }
+    uint32_t t = (uint32_t)h * 191 / 255, ramp = (t & 63) << 2;
+    if (t >= 128) {
+        put(p, 255, 255, ramp);
+    } else if (t >= 64) {
+        put(p, 255, ramp, 0);
+    } else {
+        put(p, ramp, 0, 0);
+    }
+}
+
+static void fire_map(uint8_t (*out)[3], int n, int dir)
+{
+    for (int i = 0; i < n; i++) {
+        int y = dir > 0 ? i : dir < 0 ? n - 1 - i : (i < n - 1 - i ? i : n - 1 - i);
+        heat_rgb(fire_h[y], out[i]);
+    }
+}
+
+// Fire: flames that always rise. The IMU says which end is down and the fire burns from there (from both ends when
+// the strip lies level), turning round with a quick crossfade when you flip it. Sound is its fuel: louder burns taller
+// and wilder, a beat throws up a flare, and shaking the board stokes it.
+static void fire(const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt, uint32_t newb)
+{
+    int dir = fire_dir;
+    if (!have_imu(m)) {
+        dir = 1;
+    } else if (m->tilt > 0.3f) {
+        dir = 1;                                                  // + end raised: the base is pixel 0
+    } else if (m->tilt < -0.3f) {
+        dir = -1;
+    } else if (m->tilt > -0.15f && m->tilt < 0.15f) {
+        dir = 0;
+    }
+    if (fire_dir == 2) {
+        fire_dir = dir;
+    } else if (dir != fire_dir) {
+        fire_map(fire_snap, n, fire_dir);
+        fire_xf = 256;
+        fire_dir = dir;
+    }
+    int len = dir ? n : (n + 1) / 2;
+    float fuel = clampf((sm_loud >> 8) / 255.0f * 0.8f + clampf(m->energy, 0, 1) * 0.6f, 0, 1);
+    uint32_t cool = (uint32_t)(100 - 50 * fuel), sparking = (uint32_t)(50 + 130 * fuel);
+    if (newb) {                                                   // a flare from the base
+        for (int y = 0; y < len / 12 + 2 && y < len; y++) {
+            fire_h[y] = 255;
+        }
+    }
+    for (fire_acc += dt; fire_acc >= 16; fire_acc -= 16) {        // the flame runs at 62.5 steps a second whatever the frame rate
+        for (int y = 0; y < len; y++) {
+            uint32_t c = rnd() % (cool * 10 / (uint32_t)len + 2);
+            fire_h[y] = fire_h[y] > c ? fire_h[y] - c : 0;
+        }
+        for (int y = len - 1; y >= 2; y--) {
+            fire_h[y] = (fire_h[y - 1] + 2 * fire_h[y - 2]) / 3;
+        }
+        if (len >= 2) {
+            fire_h[1] = (fire_h[0] + fire_h[1] * 2) / 3;
+        }
+        if (rnd() % 255 < sparking) {
+            int y = rnd() % (len / 10 + 2 < len ? len / 10 + 2 : len);
+            uint32_t v = fire_h[y] + 160 + rnd() % 96;
+            fire_h[y] = v > 255 ? 255 : v;
+        }
+    }
+    fire_map(out, n, dir);
+    if (fire_xf > 0) {
+        for (int i = 0; i < n; i++) {
+            for (int ch = 0; ch < 3; ch++) {
+                out[i][ch] = (out[i][ch] * (256 - fire_xf) + fire_snap[i][ch] * fire_xf) >> 8;
+            }
+        }
+        fire_xf -= (int)(dt * 256 / 300);
+    }
+}
+
+// A glowing streak from pixel a to b (fractional pixels) with soft ends of r pixels, drawn over the trail (brightest wins),
+// so a fast mover leaves no gaps between frames.
+static void streak(int n, float a, float b, float r, const uint8_t *c)
+{
+    float lo = a < b ? a : b, hi = a < b ? b : a;
+    int i0 = (int)floorf(lo - r), i1 = (int)ceilf(hi + r);
+    i0 = i0 < 0 ? 0 : i0;
+    i1 = i1 > n - 1 ? n - 1 : i1;
+    for (int i = i0; i <= i1; i++) {
+        float d = i < lo ? lo - i : i > hi ? i - hi : 0;
+        if (d >= r) {
+            continue;
+        }
+        uint32_t f = (uint32_t)(255 * (1 - d / r));
+        f = gam(f);
+        for (int ch = 0; ch < 3; ch++) {
+            uint8_t v = c[ch] * f / 255;
+            trail[i][ch] = v > trail[i][ch] ? v : trail[i][ch];
+        }
+    }
+}
+
+static void fade_trail(int n, uint32_t dt, float tau_ms)
+{
+    uint32_t k = (uint32_t)(256 * expf(-(float)dt / tau_ms));
+    for (int i = 0; i < n; i++) {
+        for (int ch = 0; ch < 3; ch++) {
+            trail[i][ch] = trail[i][ch] * k >> 8;
+        }
+    }
+}
+
+// Bounce: glowing balls under real gravity. They fall to whichever end is lower (and roll about when the strip lies
+// flat), bounce off the ends, and every beat kicks them back up, higher the louder it is; a knock on the board throws
+// them all up and a shove along the strip sloshes them. Turning the board turns their colours.
+static void bounce(const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt, bool beat)
+{
+    int k = n < 30 ? 2 : n < 90 ? 3 : 5;
+    float g = have_imu(m) ? -9.81f * (m->tilt + m->lin_along) / 2.0f : -3.4f;   // strips/s^2 on a 2 m strip; + raised: fall to 0
+    bool knock = m->kicks != last_kicks;
+    float loud = (sm_loud >> 8) / 255.0f;
+    float from[6];
+    for (int b = 0; b < k; b++) {
+        from[b] = balls[b].x * (n - 1);
+        if (beat || knock) {
+            float hgt = knock ? 0.9f : (0.15f + 0.6f * loud) * (0.55f + 0.45f * (b + 1) / k);
+            float up = g < 0 ? 1 : -1;                            // against gravity
+            float v = fabsf(g) > 0.6f ? sqrtf(2 * fabsf(g) * hgt) : 0.5f + 1.2f * hgt;
+            if (fabsf(g) <= 0.6f) {
+                up = rnd() & 1 ? 1 : -1;                          // flat: a nudge either way
+            }
+            balls[b].v += up * v;
+        }
+        for (float left = dt / 1000.0f; left > 0; left -= 0.004f) {
+            float h = left < 0.004f ? left : 0.004f;
+            balls[b].v += g * h;
+            balls[b].v *= 1 - 0.35f * h;                          // a little air
+            balls[b].x += balls[b].v * h;
+            if (balls[b].x < 0) {
+                balls[b].x = -balls[b].x * 0.5f;
+                balls[b].v = -balls[b].v * 0.72f;
+            } else if (balls[b].x > 1) {
+                balls[b].x = 1 - (balls[b].x - 1) * 0.5f;
+                balls[b].v = -balls[b].v * 0.72f;
+            }
+        }
+    }
+    fade_trail(n, dt, 110);
+    float r = n / 40.0f > 1.5f ? n / 40.0f : 1.5f;
+    uint8_t rot = (uint8_t)(m->heading * 256 / 360);
+    for (int b = 0; b < k; b++) {
+        uint8_t c[3];
+        pick(NULL, 0, (uint8_t)(use_user ? b * 255 / (k - 1) : rot + b * 256 / k), c);
+        float sp = fabsf(balls[b].v) / 2;
+        scale3(c, c, (uint32_t)(190 + 65 * (sp > 1 ? 1 : sp)));
+        streak(n, from[b], balls[b].x * (n - 1), r, c);
+    }
+    memcpy(out, trail, (size_t)n * 3);
+}
+
+// Comet: two comets swing along the strip from opposite ends and fly through each other in the middle on every beat,
+// in time with the tempo the board has locked on to (one swing for two beats), flashing as they cross. Before it has a
+// tempo they glide at a pace set by the loudness, and a beat only swells their heads. Their colours sit opposite on the wheel and turn as you turn the board.
+static void comet(const mic_snap_t *a, const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt, bool beat)
+{
+    float h = dt / 1000.0f;
+    bool locked = a->bpm && a->lock >= 30;
+    float rate = locked ? a->bpm / 120.0f : 0.12f + 0.4f * amb;  // laps per second
+    com_ph = wrapf(com_ph + rate * h);
+    if (beat) {
+        if (locked) {                                             // pull the crossing (phase 1/4 or 3/4) onto the beat
+            float e = (com_ph - 0.25f) * 2;
+            e = (e - floorf(e + 0.5f)) / 2;
+            com_ph = wrapf(com_ph - e * 0.6f);
+        }
+        com_flash = 0.5f + 0.5f * (sm_loud >> 8) / 255.0f;
+    } else {
+        com_flash *= keep / 65536.0f;
+    }
+    fade_trail(n, dt, 180);
+    float s = 0.5f - 0.5f * cosf(6.2831853f * com_ph), pos[2] = {s * (n - 1), (1 - s) * (n - 1)};
+    float r = (n / 50.0f > 1.2f ? n / 50.0f : 1.2f) * (1 + com_flash);
+    uint8_t hue = (uint8_t)(m->heading * 256 / 360);
+    for (int c = 0; c < 2; c++) {
+        uint8_t col[3];
+        pick(NULL, 0, (uint8_t)(use_user ? c * 255 : hue + c * 128), col);
+        float from = com_prev[c] >= 0 && com_prev[c] <= n - 1 ? com_prev[c] : pos[c];
+        streak(n, from, pos[c], r, col);
+        com_prev[c] = pos[c];
+    }
+    memcpy(out, trail, (size_t)n * 3);
+    uint32_t fl = (uint32_t)(com_flash * 200);                    // the crossing flash: white at the middle, a quarter wide
+    if (locked && fl > 8) {
+        int w = n / 8 > 1 ? n / 8 : 1;
+        for (int i = n / 2 - w; i <= n / 2 + w; i++) {
+            if (i < 0 || i >= n) {
+                continue;
+            }
+            int d = i - n / 2;
+            uint32_t v = fl * (uint32_t)(w - (d < 0 ? -d : d)) / (uint32_t)w;
+            v = gam(v);
+            uint8_t wc[3] = {(uint8_t)v, (uint8_t)v, (uint8_t)v};
+            add(out[i], wc);
+        }
+    }
+}
+
 void fx_render(fx_t k, const mic_snap_t *a, const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt,
                const uint8_t base[3])
 {
@@ -438,8 +754,24 @@ void fx_render(fx_t k, const mic_snap_t *a, const motion_snap_t *m, uint8_t (*ou
     dt = dt > 200 ? 200 : dt;                                     // after a pause, don't jump
     if (!primed) {
         last_beats = a->beats;
+        last_kicks = m->kicks;
+        for (int i = 0; i < 256; i++) {
+            sin_t[i] = (uint8_t)(128 + 127 * sinf(i * 6.2831853f / 256));
+        }
+        for (int b = 0; b < 6; b++) {
+            balls[b].x = 0.5f;
+        }
+        com_prev[0] = com_prev[1] = -1;
         primed = true;
     }
+    if (k != last_k) {                                            // a fresh start for the styles that keep a picture
+        memset(trail, 0, sizeof trail);
+        com_prev[0] = com_prev[1] = -1;
+        fire_dir = 2;
+        fire_xf = 0;
+        last_k = k;
+    }
+    uint32_t newb = a->beats - last_beats;
     // Release: tau from ~1 s (react 1) to 40 ms (react 100), log-spaced; keep = exp(-dt / tau) in Q16.
     float tau = 1000.0f * powf(0.04f, (react_ - 1) / 99.0f);
     keep = (uint32_t)(65536.0f * expf(-(float)dt / tau));
@@ -450,6 +782,7 @@ void fx_render(fx_t k, const mic_snap_t *a, const motion_snap_t *m, uint8_t (*ou
     for (int i = 0; i < MIC_SPEC; i++) {
         sm_spec[i] = follow(sm_spec[i], a->spec[i], keep);
     }
+    amb = ease_to(amb, a->loud / 255.0f, 1.2f, dt);
     switch (k) {
     case FX_EQ:     eq(out, n); break;
     case FX_RIPPLE: ripple(a, out, n, dt, base); break;
@@ -462,7 +795,12 @@ void fx_render(fx_t k, const mic_snap_t *a, const motion_snap_t *m, uint8_t (*ou
     case FX_SPIN:   spin(m, out, n); break;
     case FX_SLOSH:  slosh(m, out, n, dt, base); break;
     case FX_HEIGHT: height(m, out, n, dt, base); break;
+    case FX_AURORA: aurora(m, out, n, dt, newb != 0); break;
+    case FX_FIRE:   fire(m, out, n, dt, newb); break;
+    case FX_BOUNCE: bounce(m, out, n, dt, newb != 0); break;
+    case FX_COMET:  comet(a, m, out, n, dt, newb != 0); break;
     default:        memset(out, 0, (size_t)n * 3);
     }
     last_beats = a->beats;
+    last_kicks = m->kicks;
 }

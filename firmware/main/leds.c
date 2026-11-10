@@ -49,10 +49,11 @@ static bool settled = true;
 static int64_t last_us;
 typedef struct { uint16_t a, b; leds_color_t c; uint8_t r, g, bl; bool on; } seg_t;
 static seg_t segs[LED_MAX_SEGS];
-static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "bubble", "tilt", "shake", "spin", "slosh", "height", "stream"};
+static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "bubble", "tilt", "shake", "spin", "slosh", "height", "aurora", "fire", "bounce", "comet", "stream"};
 static mic_snap_t audio;
 static motion_snap_t motion;
 static int64_t fx_us;
+static bool fxpal;                                        // fused styles take the user's gradient (slot 0)
 static uint8_t stream_fb[MAX_LEDS][3];
 static int64_t stream_at;
 static uint8_t hue, temp_pos = 128, last_cap;
@@ -238,6 +239,21 @@ static uint8_t capped(uint32_t sum, uint8_t lvl)
     return (uint32_t)lvl * avail / lit;
 }
 
+// The gradient in slot sl at x % along it (8.8 fixed point): a blend of the two stops around it.
+static void grad_at(int sl, uint32_t x, uint8_t *p)
+{
+    int np = npal[sl], k = 0;
+    while (k < np - 2 && x >= (uint32_t)pal_pos[sl][k + 1] << 8) {
+        k++;
+    }
+    int k1 = k + 1 < np ? k + 1 : k;
+    uint32_t p0 = (uint32_t)pal_pos[sl][k] << 8, p1 = (uint32_t)pal_pos[sl][k1] << 8;
+    uint32_t f = x <= p0 || p1 <= p0 ? 0 : x >= p1 ? 256 : (x - p0) * 256 / (p1 - p0);   // before the first stop and after the last: that stop
+    for (int ch = 0; ch < 3; ch++) {
+        p[ch] = (pal[sl][k][ch] * (256 - f) + pal[sl][k1][ch] * f) >> 8;
+    }
+}
+
 // One pixel of a colour source: i of n within its run (the whole strip, or a segment).
 static void render(leds_color_t c, int i, int n, uint8_t r, uint8_t g, uint8_t b, const uint8_t bands[3], uint8_t *p)
 {
@@ -269,17 +285,7 @@ static void render(leds_color_t c, int i, int n, uint8_t r, uint8_t g, uint8_t b
             p[0] = q[0]; p[1] = q[1]; p[2] = q[2];
             break;
         }
-        uint32_t x = n > 1 ? (uint32_t)i * 100 * 256 / (n - 1) : 0;   // position along the run in %, 8.8
-        int k = 0;
-        while (k < np - 2 && x >= (uint32_t)pal_pos[sl][k + 1] << 8) {
-            k++;
-        }
-        int k1 = k + 1 < np ? k + 1 : k;
-        uint32_t p0 = (uint32_t)pal_pos[sl][k] << 8, p1 = (uint32_t)pal_pos[sl][k1] << 8;
-        uint32_t f = x <= p0 || p1 <= p0 ? 0 : x >= p1 ? 256 : (x - p0) * 256 / (p1 - p0);   // before the first stop and after the last: that stop
-        for (int ch = 0; ch < 3; ch++) {
-            p[ch] = (pal[sl][k][ch] * (256 - f) + pal[sl][k1][ch] * f) >> 8;
-        }
+        grad_at(sl, n > 1 ? (uint32_t)i * 100 * 256 / (n - 1) : 0, p);   // position along the run in %, 8.8
         break;
     }
     case COLOR_METER:                                           // green, yellow, red along the run
@@ -336,6 +342,13 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         uint32_t dt = fx_us ? (uint32_t)((t - fx_us) / 1000) : FRAME_MS;
         fx_us = t;
         uint8_t base[3] = {cur_r, cur_g, cur_b};
+        if (LED_IS_FUSED(c)) {                                   // sample the gradient for the fused styles' colours
+            uint8_t lut[FX_PAL][3];
+            for (int k = 0; k < FX_PAL; k++) {
+                grad_at(0, (uint32_t)k * 100 * 256 / (FX_PAL - 1), lut[k]);
+            }
+            fx_set_palette(lut, fxpal);
+        }
         fx_render((fx_t)(c - COLOR_EQ), &audio, &motion, fb, count, dt, base);
     }
     for (int i = 0; i < count; i++) {
@@ -620,6 +633,11 @@ void leds_set_motion(const struct motion_snap *m)
 void leds_set_hstep(uint16_t cm)
 {
     fx_set_hstep(cm);
+}
+
+void leds_set_fxpal(bool on)
+{
+    fxpal = on;
 }
 
 void leds_set_react(uint8_t r)

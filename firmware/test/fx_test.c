@@ -202,6 +202,88 @@ int main(void)
     for (int f = 0; f < 60; f++) fx_render(FX_HEIGHT, &a, &mo, px, N, 16, blue);
     assert(px[3][2] > 250 && px[3][0] < 4);
 
+    // aurora: a calm, dim sky in silence, brighter with music; never black all over, never NaN-dark.
+    memset(&mo, 0, sizeof mo); mo.up[2] = 1;
+    memset(&a, 0, sizeof a);
+    fx_set_react(60);
+    run(FX_AURORA, &a, 200);
+    long quiet = 0; for (int i = 0; i < N; i++) quiet += lum(i);
+    int qlit = lit_count();
+    a.loud = 220; a.bands[2] = 200;
+    run(FX_AURORA, &a, 250);
+    long loud = 0; for (int i = 0; i < N; i++) loud += lum(i);
+    long before_beat = loud;
+    a.beats++; run(FX_AURORA, &a, 1);
+    long on_beat = 0; for (int i = 0; i < N; i++) on_beat += lum(i);
+    printf("aurora: quiet %ld (%d px lit), loud %ld, on a beat %ld\n", quiet, qlit, loud, on_beat);
+    assert(quiet > 0 && qlit > N / 5 && loud > quiet * 3 / 2 && on_beat > before_beat);
+
+    // fire: without an IMU it burns from pixel 0; + end raised the same; - end raised from the far end; flat from
+    // both ends. Loud burns taller.
+    memset(&a, 0, sizeof a);
+    memset(&mo, 0, sizeof mo);
+    #define SUMR(lo, hi) ({ long s_ = 0; for (int i_ = (lo); i_ < (hi); i_++) s_ += lum(i_); s_; })
+    run(FX_FIRE, &a, 300);
+    long f0 = SUMR(0, N / 4), f1 = SUMR(3 * N / 4, N);
+    assert(f0 > f1 * 3 && f0 > 0);
+    mo.up[2] = 1; mo.tilt = -0.6f;
+    run(FX_FIRE, &a, 300);
+    long r0 = SUMR(0, N / 4), r1 = SUMR(3 * N / 4, N);
+    assert(r1 > r0 * 3);
+    mo.tilt = 0;
+    run(FX_FIRE, &a, 300);
+    long e0 = SUMR(0, N / 6), em = SUMR(N / 2 - N / 12, N / 2 + N / 12), e1 = SUMR(N - N / 6, N);
+    assert(e0 > em * 2 && e1 > em * 2);
+    mo.tilt = 0.6f;
+    long quietf = 0, loudf = 0;
+    for (int f = 0; f < 300; f++) { run(FX_FIRE, &a, 1); quietf += lit_count(); }
+    a.loud = 255;
+    for (int f = 0; f < 300; f++) { run(FX_FIRE, &a, 1); loudf += lit_count(); }
+    printf("fire: no imu base/top %ld/%ld, flipped %ld/%ld, flat ends %ld,%ld mid %ld; flame %ld px quiet, %ld loud\n",
+           f0, f1, r0, r1, e0, e1, em, quietf / 300, loudf / 300);
+    assert(loudf > quietf * 3 / 2);
+
+    // bounce: balls settle at the low end; a loud beat throws them up the strip; flipping it sends them the other way.
+    memset(&a, 0, sizeof a);
+    memset(&mo, 0, sizeof mo); mo.up[2] = 1; mo.tilt = 0.8f;
+    run(FX_BOUNCE, &a, 250);
+    float rest = centroid();
+    a.loud = 255; a.beats++;
+    float top = 0;
+    for (int f = 0; f < 30; f++) { run(FX_BOUNCE, &a, 1); int b = 0; for (int i = 0; i < N; i++) if (lum(i) > 300) b = i; top = b > top ? b : top; }
+    mo.tilt = -0.8f; a.loud = 0;
+    run(FX_BOUNCE, &a, 300);
+    float flipped = centroid();
+    printf("bounce: at rest centre %.1f, a loud beat throws the top ball to %.0f, flipped rests at %.1f\n", rest, top, flipped);
+    assert(rest < N * 0.1f && top > N * 0.4f && flipped > N * 0.9f);
+
+    // comet: locked at 120 BPM, the comets cross in the middle on each beat.
+    memset(&a, 0, sizeof a);
+    memset(&mo, 0, sizeof mo); mo.up[2] = 1;
+    a.bpm = 120; a.lock = 80; a.loud = 150;
+    int near = 0;
+    for (int beat = 0; beat < 16; beat++) {
+        for (int f = 0; f < 31; f++) run(FX_COMET, &a, 1);   // 496 ms
+        a.beats++;
+        fx_render(FX_COMET, &a, &mo, px, N, 4, white);
+        if (beat >= 8) {
+            int lo = N, hi = -1;                                   // the comet heads: the brightest coloured pixels
+            for (int i = 0; i < N; i++) if (lum(i) > 600) { lo = i < lo ? i : lo; hi = i > hi ? i : hi; }
+            near += lo > N / 2 - N / 5 && hi < N / 2 + N / 5;
+        }
+    }
+    printf("comet: on %d of 8 beats the heads are crossing the middle\n", near);
+    assert(near >= 7);
+
+    // the user's gradient replaces the styles' own colours
+    uint8_t lut[FX_PAL][3];
+    for (int i = 0; i < FX_PAL; i++) { lut[i][0] = 0; lut[i][1] = 0; lut[i][2] = 255; }
+    fx_set_palette(lut, true);
+    memset(&a, 0, sizeof a); a.loud = 200;
+    run(FX_AURORA, &a, 100);
+    for (int i = 0; i < N; i++) assert(px[i][0] <= px[i][2] / 4 + 2 && px[i][1] <= px[i][2] / 4 + 2);
+    fx_set_palette(lut, false);
+
     // odd lengths and tiny strips don't go out of bounds
     uint8_t one[1][3], odd[7][3];
     for (int k = 0; k < FX_N; k++) {

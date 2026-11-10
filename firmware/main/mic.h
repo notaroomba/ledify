@@ -15,7 +15,8 @@ void mic_feed(uint8_t loud, const uint8_t bands[3], uint8_t pulse, const uint8_t
 // Everything the sound styles read, in one go. beats counts onsets (compare with the last value to catch each one);
 // at is when the newest analysis was made (esp_timer us).
 #define MIC_SPEC 16
-typedef struct mic_snap { uint8_t loud, pulse, bands[3], spec[MIC_SPEC]; uint32_t beats; int64_t at; } mic_snap_t;
+// bpm/lock: the tempo tracker's estimate and confidence (0..100), as mic_bpm()/mic_lock().
+typedef struct mic_snap { uint8_t loud, pulse, bands[3], spec[MIC_SPEC]; uint32_t beats; int64_t at; uint16_t bpm; uint8_t lock; } mic_snap_t;
 void mic_snapshot(mic_snap_t *s);
 void mic_stats(uint32_t *max_us, uint32_t *dropped);
 int mic_raw_json(char *out, size_t n);   // diagnostics JSON: current samples and the loudest block of the last minute
