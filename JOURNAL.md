@@ -48,6 +48,14 @@ Then I went through the panel twice, first onto Tailwind and then I rewrote it o
 
 I also wrote down what I want for rev 2 in the [README](README.md): current sensing, a second data output, a 5.2V setting for long strips, power injection pads, a user button, and checking the mic port, since the first board's mic doesnt hear anything.
 
+# 10/14/2026 9 PM - Writing the Firmware
+
+Then I started on the actual firmware. Its an ESP-IDF app that does the USB-C PD negotiation, reads all the sensors, and talks over BLE and Wi-Fi + MQTT so it shows up in Home Assistant, plus a serial console and support for different LED chip types. It goes up to 1000 pixels and caps the brightness to whatever the charger can actually give, and it takes the most powerful PD offer and renegotiates for 12V when I ask. Since 12V kills 5V pixels, `volt 12` has to be confirmed with `yes` everywhere, even from the panel.
+
+I put Home Assistant on Railway next to the MQTT broker and made the leds react to sound, temperature and light, so the colour, brightness and an overlay can all come from the mic or the sensors. I also added a fallback Wi-Fi network, OTA updates over Wi-Fi with rollback, and a web control panel on Railway with a live spectrum and an OTA button.
+
+I also spent a while on the mic, a noise gate with a smoothed floor, a `micraw` diagnostic and a listen mode where the board streams its mic to the panel so I can actually hear what it hears. And right after midnight I got the panel pulling the colours out of the album cover of whatever is playing on Spotify and sending them to the strip as a gradient.
+
 # 10/2026 - Fixing the Short and First Light
 
 _Time spent: 5h_
