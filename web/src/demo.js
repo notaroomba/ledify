@@ -52,7 +52,8 @@ function run(cmd) {
   else reply = 'demo: that command is only pretend here';
   st.cap = st.limit ? Math.min(st.level, 120) : st.level;
   pub();
-  if (k !== 'status' && k !== 'live' && k !== 'audio') ingest('ledify/demo/reply', reply);
+  if (k === 'status') ingest('ledify/demo/reply', JSON.stringify(st));       // the real board answers status with the whole state
+  else if (k !== 'live' && k !== 'audio') ingest('ledify/demo/reply', reply);
 }
 export function startDemo() {
   hooks.demo = run;

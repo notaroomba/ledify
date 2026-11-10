@@ -85,10 +85,16 @@ export function publishRaw(suffix, payload) {
 // The board streams loudness/bands at 10 Hz while a lease is active; renew it while this tab is visible.
 export function keepLive() { if (ui.current && document.visibilityState === 'visible') send('live 90'); }
 
-function onReply(text) {
+// Replies to commands. "status" answers with the whole state as JSON: that is state, not a message to show.
+function onReply(text, id) {
   log('< ' + text);
-  if (/^err/i.test(text) || /destroys|needs|refused|busy/i.test(text)) toast(text.replace(/^err[,:]?\s*/i, ''), 'warn', 5000);
-  else if (text !== 'ok') toast(text, 'info');
+  if (/^\s*[{[]/.test(text)) {
+    try { const j = JSON.parse(text); if (j && j.fw !== undefined) setUi('devices', id, 'state', j); } catch (e) { /* not JSON after all */ }
+    return;
+  }
+  const short = text.length > 140 ? text.slice(0, 137) + '…' : text;
+  if (/^err/i.test(text) || /destroys|needs|refused|busy/i.test(text)) toast(short.replace(/^err[,:]?\s*/i, ''), 'warn', 5000);
+  else if (text !== 'ok') toast(short, 'info');
 }
 export function ingest(topic, payload) {
   const m = topic.match(/^ledify\/([^/]+)\/(.+)$/);
@@ -99,7 +105,7 @@ export function ingest(topic, payload) {
   const mine = id === ui.current;
   if (what === 'audio') { if (mine && hooks.audio) hooks.audio(payload); return; }
   const text = payload.toString();
-  if (what === 'reply') { if (mine) onReply(text); return; }
+  if (what === 'reply') { if (mine) onReply(text, id); return; }
   if (what === 'live') {
     if (mine) { try { const j = JSON.parse(text); if (j.loud !== undefined) setUi('live', j); } catch (e) { /* diagnostics payloads */ } }
     return;
