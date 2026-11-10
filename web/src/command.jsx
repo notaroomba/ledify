@@ -26,6 +26,7 @@ export function CommandBar(p) {
     { label: 'Sunrise over 20 min', kind: 'timer', run: () => send('rise 20'), keys: 'wake alarm' },
     { label: 'Set up a board over Bluetooth', kind: 'setup', run: () => setSetupOpen(true), keys: 'wifi ble' },
     ...(!LOCAL && !DEMO ? [{ label: 'Broker settings', kind: 'setup', run: () => setUi('brokerOpen', true), keys: 'mqtt' }] : []),
+    ...(!LOCAL ? [{ label: 'Open the effect simulator', kind: 'tool', run: () => window.open('/sim.html', '_blank'), keys: 'sim preview test audio' }] : []),
   ];
   // Every word typed must appear somewhere in the label, kind or keywords; earlier matches rank higher.
   const items = createMemo(() => {
