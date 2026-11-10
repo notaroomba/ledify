@@ -8,7 +8,7 @@ const [on, setOn] = createSignal(false), [lstate, setLstate] = createSignal('off
 let lctx, lnext = 0, ltimer;
 hooks.audio = buf => {
   if (!on()) return;
-  const pcm = new Int16Array(buf.buffer, buf.byteOffset, buf.length >> 1);
+  const pcm = new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + (buf.length & ~1)));   // copy: MQTT payloads often start at an odd offset, which Int16Array rejects
   const ab = lctx.createBuffer(1, pcm.length, 16000), ch = ab.getChannelData(0), g = vol() / 32768;
   for (let i = 0; i < pcm.length; i++) ch[i] = Math.max(-1, Math.min(1, pcm[i] * g));
   const src = lctx.createBufferSource(); src.buffer = ab; src.connect(lctx.destination);
