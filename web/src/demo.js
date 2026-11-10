@@ -9,7 +9,7 @@ const st = {
   pdos: [[5000, 3000], [9000, 3000], [15000, 3000], [20000, 3000]], need_mw: 15000, budget_mw: 51000,
   palette: 'ff3c00@0,ff8c00@35,ff0066@70,4b0082@100', time: '', tz: 'UTC0', name: 'ledify', ip: '', clients: 0, hot: 0,
   board_c: 31.2, sleep: 0, rise: 0, sched: [], segs: [], stream: null, boots: 1, rst: 'poweron', boot_log: [],
-  lux: 142, temp_c: 31.2, pressure_pa: 101325, sound_db: 48, db_peak: 52, loud: 0, axis: 0, motion: 1,
+  lux: 142, temp_c: 31.2, pressure_pa: 101325, sound_db: 48, db_peak: 52, loud: 0, axis: 0, motion: 1, hstep: 10,
 };
 let color = { r: 255, g: 255, b: 255 };
 
@@ -62,7 +62,7 @@ export function startDemo() {
   setInterval(() => {
     t += 0.1;
     const w = (f, p = 0) => Math.round(128 + 120 * Math.sin(t * f + p));
-    ingest('ledify/demo/live', JSON.stringify({ loud: w(2), bands: [w(3), w(5, 1), w(7, 2)], pulse: Math.sin(t * 2) > 0.95 ? 255 : 0, db: 50 + Math.round(10 * Math.sin(t)), cap: st.cap, lat: 21, spec: Array.from({ length: 16 }, (_, k) => w(2 + k * 0.4, k)), mo: [Math.round(30 * Math.sin(t * 0.9)), Math.round(25 * Math.sin(t * 0.6 + 1)), Math.round((t * 40) % 360), Math.round(100 * Math.max(0, Math.sin(t * 1.3)) ** 4)] }));
+    ingest('ledify/demo/live', JSON.stringify({ loud: w(2), bands: [w(3), w(5, 1), w(7, 2)], pulse: Math.sin(t * 2) > 0.95 ? 255 : 0, db: 50 + Math.round(10 * Math.sin(t)), cap: st.cap, lat: 21, spec: Array.from({ length: 16 }, (_, k) => w(2 + k * 0.4, k)), mo: [Math.round(30 * Math.sin(t * 0.9)), Math.round(25 * Math.sin(t * 0.6 + 1)), Math.round((t * 40) % 360), Math.round(100 * Math.max(0, Math.sin(t * 1.3)) ** 4), Math.round(25 * Math.sin(t * 0.7))] }));
     if (st.sleep > 0 && (st.sleep = Math.max(0, st.sleep - 0.1)) === 0) { st.power = 0; pub(); }
     if (st.rise > 0) st.rise = Math.max(0, st.rise - 0.1);
   }, 100);

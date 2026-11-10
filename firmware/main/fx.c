@@ -22,6 +22,14 @@ static uint8_t heat[FX_MAX_LEDS], spark_hue[FX_MAX_LEDS];
 static float spark_acc;
 static uint32_t last_kicks, rng = 0x2545F491;
 static float liq_x, liq_v;                   // slosh: the liquid's centre -1..1 and its speed
+static uint16_t hstep = 10;                  // height: cm per colour step
+static int h_band;                           // height: the step showing (with hysteresis)
+static float h_rgb[3];                       // height: the colour on the strip, easing to the step's
+
+void fx_set_hstep(uint16_t cm)
+{
+    hstep = cm < 1 ? 1 : cm > 500 ? 500 : cm;
+}
 
 void fx_set_react(uint8_t r)
 {
@@ -375,6 +383,51 @@ static void slosh(const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt,
     }
 }
 
+// Hue of an rgb colour, 0..255 (0 for greys).
+static uint8_t hue_of(const uint8_t *c)
+{
+    int r = c[0], g = c[1], b = c[2], mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    int d = mx - mn;
+    if (!d) {
+        return 0;
+    }
+    int h = mx == r ? 43 * (g - b) / d : mx == g ? 85 + 43 * (b - r) / d : 171 + 43 * (r - g) / d;
+    return (uint8_t)(h < 0 ? h + 256 : h);
+}
+
+// Height: the whole strip changes colour every hstep cm the board is raised or lowered from where height was
+// zeroed: your colour at 0, then an eighth of the way round the colour wheel per step (up one way, down the other).
+// A step only changes once the board is a fifth of a step (and 3 cm) past the line, so hovering on it doesn't flicker; the
+// colour eases over about 120 ms. A faint white dot travels along the strip as the board climbs through the step.
+static void height(const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt, const uint8_t base[3])
+{
+    float pos = m->height * 100.0f / hstep;                       // in steps
+    float hy = 3.0f / hstep;                                      // hysteresis: 3 cm (the barometer's jitter), at least
+    hy = hy < 0.2f ? 0.2f : hy > 0.45f ? 0.45f : hy;              // a fifth of a step, at most just under half
+    if (pos >= h_band + 1 + hy || pos < h_band - hy) {
+        h_band = (int)floorf(pos + (pos > h_band ? -hy : hy));
+    }
+    uint8_t want[3];
+    if (h_band == 0) {
+        memcpy(want, base, 3);
+    } else {
+        hsv((uint8_t)(hue_of(base) + h_band * 32), 255, want);
+    }
+    for (int ch = 0; ch < 3; ch++) {
+        h_rgb[ch] = ease_to(h_rgb[ch], want[ch], 0.12f, dt);
+    }
+    float frac = pos - floorf(pos);
+    int dot = n > 1 ? (int)(frac * (n - 1) + 0.5f) : -1;
+    for (int i = 0; i < n; i++) {
+        put(out[i], (uint8_t)h_rgb[0], (uint8_t)h_rgb[1], (uint8_t)h_rgb[2]);
+        if (n >= 10 && (i == dot || i == dot + 1)) {
+            for (int ch = 0; ch < 3; ch++) {
+                out[i][ch] = (out[i][ch] + 255) / 2;
+            }
+        }
+    }
+}
+
 void fx_render(fx_t k, const mic_snap_t *a, const motion_snap_t *m, uint8_t (*out)[3], int n, uint32_t dt,
                const uint8_t base[3])
 {
@@ -408,6 +461,7 @@ void fx_render(fx_t k, const mic_snap_t *a, const motion_snap_t *m, uint8_t (*ou
     case FX_SHAKE:  shake(m, out, n, dt, base); break;
     case FX_SPIN:   spin(m, out, n); break;
     case FX_SLOSH:  slosh(m, out, n, dt, base); break;
+    case FX_HEIGHT: height(m, out, n, dt, base); break;
     default:        memset(out, 0, (size_t)n * 3);
     }
     last_beats = a->beats;

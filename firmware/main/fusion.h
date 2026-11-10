@@ -27,6 +27,9 @@ typedef struct motion_snap {
     float energy;         // how much it is moving: about 0 at rest, 1 for a brisk shake
     uint32_t kicks;       // jolts so far (a tap or a sharp knock): compare with the last value to catch each one
     float bias[3];        // gyro bias in use, deg/s
+    bool have_height;     // the barometer is feeding fusion_baro()
+    float height;         // metres above where height was last zeroed (barometer + accelerometer)
+    float vz;             // vertical speed, m/s
 } motion_snap_t;
 
 #define FUSION_HZ 200
@@ -39,3 +42,9 @@ void fusion_set_axis(int axis);
 // One sample: acc in g, gyr in deg/s (raw, bias included), dt in seconds.
 void fusion_update(const float acc[3], const float gyr[3], float dt);
 void fusion_get(motion_snap_t *s);
+// Height: the barometer (pressure in Pa, every dt s, ~20 Hz) gives the height without drift but with a few cm of
+// noise and some lag; the accelerometer's vertical part, integrated twice between readings, gives the movement at
+// once but drifts within seconds. A third-order complementary filter (as in a variometer) takes the slow part from
+// the barometer and the fast part from the accelerometer, and learns the accelerometer's vertical offset too.
+void fusion_baro(float pa, float dt);
+void fusion_zero_height(void);                 // here is height 0

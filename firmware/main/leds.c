@@ -49,7 +49,7 @@ static bool settled = true;
 static int64_t last_us;
 typedef struct { uint16_t a, b; leds_color_t c; uint8_t r, g, bl; bool on; } seg_t;
 static seg_t segs[LED_MAX_SEGS];
-static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "bubble", "tilt", "shake", "spin", "slosh", "stream"};
+static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "bubble", "tilt", "shake", "spin", "slosh", "height", "stream"};
 static mic_snap_t audio;
 static motion_snap_t motion;
 static int64_t fx_us;
@@ -615,6 +615,11 @@ void leds_set_audio(const struct mic_snap *a)
 void leds_set_motion(const struct motion_snap *m)
 {
     motion = *m;
+}
+
+void leds_set_hstep(uint16_t cm)
+{
+    fx_set_hstep(cm);
 }
 
 void leds_set_react(uint8_t r)

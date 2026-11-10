@@ -2,9 +2,9 @@
 // of n [r, g, b] 0..255 colours, before brightness) for the preview ring; x carries the inputs (colour, gradient,
 // cover, live sound, temperature). An effect without paint gets a sound-tinted shimmer of the current colour.
 // `fw: 'react'` marks modes that need newer firmware: they show once the board reports that state field.
-// Motion modes read x.live.mo ([tilt, side, heading, energy], from the board's IMU while the panel is open); without it
+// Motion modes read x.live.mo ([tilt, side, heading, energy, height cm], from the board's IMU while the panel is open); without it
 // the previews sway on their own.
-import { hsv, mix } from './color';
+import { hsv, mix, rgbHsv } from './color';
 import { rgbAt } from './gradient';
 
 const fill = (px, c) => { for (const p of px) { p[0] = c[0]; p[1] = c[1]; p[2] = c[2]; } };
@@ -13,8 +13,8 @@ const band = (x, k) => (x.live.bands[k] || 0) / 255;
 const clamp1 = v => Math.max(-1, Math.min(1, v));
 const motion = (x, t) => {
   const m = x.live.mo;
-  return m ? { tilt: m[0] / 100, side: m[1] / 100, heading: m[2], energy: m[3] / 100 }
-    : { tilt: 0.3 * Math.sin(t * 0.9), side: 0.25 * Math.sin(t * 0.6 + 1), heading: (t * 40) % 360, energy: Math.max(0, Math.sin(t * 1.3)) ** 4 };
+  return m ? { tilt: m[0] / 100, side: m[1] / 100, heading: m[2], energy: m[3] / 100, height: m[4] ?? 0 }
+    : { tilt: 0.3 * Math.sin(t * 0.9), side: 0.25 * Math.sin(t * 0.6 + 1), heading: (t * 40) % 360, energy: Math.max(0, Math.sin(t * 1.3)) ** 4, height: 25 * Math.sin(t * 0.7) };
 };
 const noise = (i, k) => { const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return v - Math.floor(v); };
 
@@ -94,6 +94,12 @@ export const EFFECTS = [
       const m = motion(x, t), pos = -clamp1(m.tilt / 0.35) + 0.25 * m.energy * Math.sin(t * 6), len = n / 2;
       const c = (n - 1) / 2 + clamp1(pos) * (n - len) / 2, froth = Math.min(1, m.energy);
       px.forEach((p, i) => { const inn = Math.min(i - (c - len / 2), c + len / 2 - i), a = Math.max(0, Math.min(1, inn + 1)), f = inn < 2 ? froth * (2 - Math.max(0, inn)) / 2 : 0; p.splice(0, 3, ...mix(x.rgb, [255, 255, 255], f).map(v => v * a)); });
+    } },
+  { id: 'height', label: 'Height', desc: 'raise or lower it: a new colour every few cm (barometer)', group: 'motion', fw: 'hstep',
+    paint: (px, n, t, x) => {
+      const pos = motion(x, t).height / Math.max(1, x.hstep), band = Math.floor(pos), frac = pos - band;
+      const col = band === 0 ? x.rgb : hsv((((rgbHsv(x.rgb)[0] + band / 8) % 1) + 1) % 1), dot = Math.round(frac * (n - 1));
+      px.forEach((p, i) => p.splice(0, 3, ...(i === dot ? mix(col, [255, 255, 255], 0.5) : col)));
     } },
 ];
 export const effectOf = id => EFFECTS.find(e => e.id === id);

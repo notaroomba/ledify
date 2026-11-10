@@ -180,6 +180,28 @@ int main(void)
     assert(lo_c < mid - 5 && hi_c > mid + 2);    // lagged back, then rocked past the middle
     assert(fabsf(centroid() - mid) < 1.5f);
 
+    // height: your colour at 0; 10 cm up is another colour; hovering 1 cm either side of 10 cm doesn't flip it back.
+    memset(&mo, 0, sizeof mo);
+    fx_set_hstep(10);
+    const uint8_t blue[3] = {0, 0, 255};
+    for (int f = 0; f < 60; f++) fx_render(FX_HEIGHT, &a, &mo, px, N, 16, blue);
+    assert(px[3][2] > 250 && px[3][0] == 0);
+    uint8_t at0[3]; memcpy(at0, px[3], 3);
+    mo.height = 0.14f;
+    for (int f = 0; f < 60; f++) fx_render(FX_HEIGHT, &a, &mo, px, N, 16, blue);
+    uint8_t at1[3]; memcpy(at1, px[3], 3);
+    printf("height: 0 cm %d,%d,%d; 14 cm %d,%d,%d\n", at0[0], at0[1], at0[2], at1[0], at1[1], at1[2]);
+    assert(abs(at1[0] - at0[0]) + abs(at1[1] - at0[1]) + abs(at1[2] - at0[2]) > 150);
+    for (int f = 0; f < 200; f++) { mo.height = f & 1 ? 0.09f : 0.11f; fx_render(FX_HEIGHT, &a, &mo, px, N, 16, blue); }
+    assert(abs(px[3][0] - at1[0]) < 4 && abs(px[3][2] - at1[2]) < 4);
+    mo.height = -0.04f;                                       // back below the line by more than the hysteresis
+    for (int f = 0; f < 60; f++) fx_render(FX_HEIGHT, &a, &mo, px, N, 16, blue);
+    assert(abs(px[3][2] - at0[2]) < 4 && px[3][0] < 4);
+    fx_set_hstep(25);
+    mo.height = 0.2f;                                         // a bigger step: 20 cm is still step 0
+    for (int f = 0; f < 60; f++) fx_render(FX_HEIGHT, &a, &mo, px, N, 16, blue);
+    assert(px[3][2] > 250 && px[3][0] < 4);
+
     // odd lengths and tiny strips don't go out of bounds
     uint8_t one[1][3], odd[7][3];
     for (int k = 0; k < FX_N; k++) {

@@ -10,9 +10,9 @@ ESP-IDF v6.1 project for the ESP32-C6 on the Ledify board.
 | `main/sensors.c` | OPT4001 light sensor (I2C), BMI323 IMU and BMP581 barometer (SPI) |
 | `main/mic.c` | ICS-43434 microphone over I2S in its own task: loudness with auto gain, beat onsets, bass/mid/treble and a 16-band spectrum |
 | `main/beat.c` | Tempo tracking and beat prediction: tempo by autocorrelation of the onset strength, phase by a comb, kept in step by each onset (`test/beat_test.c` checks it on the host) |
-| `main/fx.c` | The whole-strip sound styles (`eq`, `ripple`, `mirror`, `chroma`, `flow`) and motion styles (`bubble`, `tilt`, `shake`, `spin`, `slosh`), plain C (`test/fx_test.c` checks them on the host) |
-| `main/fusion.c` | IMU calibration and sensor fusion for the motion styles, plain C (`test/fusion_test.c` checks it on the host) |
-| `main/motion.c` | Reads the BMI323 at 200 Hz in its own task and runs the fusion |
+| `main/fx.c` | The whole-strip sound styles (`eq`, `ripple`, `mirror`, `chroma`, `flow`) and motion styles (`bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`), plain C (`test/fx_test.c` checks them on the host) |
+| `main/fusion.c` | IMU calibration, sensor fusion and barometric height for the motion styles, plain C (`test/fusion_test.c` checks it on the host) |
+| `main/motion.c` | Reads the BMI323 at 200 Hz and the BMP581 at 20 Hz in its own task and runs the fusion |
 | `main/fft.c` | 256-point fixed-point FFT and the band sums, plain C (`test/fft_test.c` checks it on the host) |
 | `main/ble.c` | Nordic UART service on NimBLE |
 | `main/net.c` | Wi-Fi station (primary + fallback network), MQTT client, Home Assistant discovery |
@@ -44,8 +44,8 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `level N` | Brightness cap, 0-255 |
 | `count N` | How many pixels are driven, 1-1000 (`MAX_LEDS`). Saved. Also a slider in Home Assistant |
 | `type ws2812` | Chip type: `ws2812` (also B/C/D/E, WS2813, WS2815), `ws2811`, `sk6812`, `sk6812w` (RGBW), `ws2816`. Saved |
-| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
-| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh` (see [Mixing styles](#mixing-styles)) |
+| `mode NAME` | Preset, the list Home Assistant shows as effects: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `height`, `sound`, `vu`, `pulse`. A colour resets the brightness source and overlay, `vu` brings its own meter colours, `sound` and `pulse` keep the colour. `mode auto` still works as `auto on` |
+| `color NAME` | Colour source on its own: `solid`, `rainbow`, `temp`, `spectrum`, `meter`, `eq`, `ripple`, `mirror`, `chroma`, `flow`, `bubble`, `tilt`, `shake`, `spin`, `slosh`, `height` (see [Mixing styles](#mixing-styles)) |
 | `bright level` / `bright sound` | Brightness source: the fixed `level`, or `level` scaled by the microphone |
 | `overlay none` / `vu` / `pulse` | Light only as many pixels as the sound level, or flash on beats |
 | `auto on` / `auto off` | Scale the brightness with the light sensor between `lux_lo` and `lux_hi`, off under `night` |
@@ -85,7 +85,8 @@ The same text commands work from three places: typed into `idf.py monitor` (USB 
 | `otabase URL` | Only accept `ota` images whose URL starts with this (`otabase any` clears it), so a leaked broker login cannot flash other firmware. Saved |
 | `live N` | Stream loudness, bands, pulse, dB, the brightness cap, the 16-band spectrum (`spec`) and the estimated sound-to-light delay in ms (`lat`), the tempo (`bpm`) and how sure the tracker is (`lock`, 0-100) to `ledify/<id>/live` at 10 Hz for N seconds (the web panel renews this) |
 | `mic [N]` | Print the microphone level on the USB console 4 times a second for N seconds (default 10, 0 stops): the loudest 8 ms block as dBFS and approximate dB SPL, the raw 24-bit min/max/mean, and a bar. A quiet room should sit around -60 to -70 dBFS and a clap should jump 30 dB or more. All zeros or a fixed value means no data from the mic |
-| `motion [N\|cal\|zero]` | The IMU: alone, a JSON snapshot (calibration state, tilt, heading, energy, gyro bias); `motion N` prints it on the USB console 4 times a second for N seconds; `motion cal` calibrates again (hold the board still for a second); `motion zero` makes the way the board sits now count as level and resets the heading |
+| `motion [N\|cal\|zero\|hzero]` | The IMU: alone, a JSON snapshot (calibration state, tilt, heading, energy, gyro bias, height); `motion N` prints it on the USB console 4 times a second for N seconds; `motion cal` calibrates again (hold the board still for a second); `motion zero` makes the way the board sits now count as level and resets the heading; `motion hzero` makes the current height 0 |
+| `hstep CM` | The `height` style's colour step, 1-500 cm, default 10. Saved |
 | `axis N` | Which board axis the strip runs along, for the motion styles: 0 +x, 1 +y, 2 +z, 3 -x, 4 -y, 5 -z, default 0. Saved |
 | `micraw` | Diagnostics on the live topic: the current block's samples and the loudest block of the last minute |
 | `audio L B M T P [SPEC]` | Feed loudness, bass, mid, treble and pulse (0-255) from outside, and optionally the 16-band spectrum as 32 hex digits; overrides the microphone for 1 s per packet. Without SPEC the three bands are spread over the spectrum |
@@ -114,8 +115,9 @@ Every frame is **colour × brightness × overlay**. `main.c` composes the three 
 | `shake` | Sparks while the board moves, more the harder it is shaken, in hues that turn with the heading; a knock flashes the whole strip |
 | `spin` | A rainbow that stays put in the room: turn the board about the vertical and the colours slide along the strip, one turn for one rainbow; brighter the faster it turns |
 | `slosh` | Half the strip is liquid in the `rgb` colour: it runs to the lower end and sloshes (about 1 Hz, settling after a few rocks) when the board is pushed along the strip, frothing white at its edges |
+| `height` | Raise or lower the board and the whole strip changes colour every `hstep` cm (default 10) from where the style was switched on (or `motion hzero`): the `rgb` colour at 0, an eighth of the way round the colour wheel per step. Hysteresis of a fifth of a step (at least 3 cm) keeps it from flickering on a line; a faint dot runs along the strip as the board climbs through each step |
 
-The last ten draw the whole strip at once and keep state between frames, so they don't go in a `seg` zone (zones on top of them still work). The five sound styles and five motion styles redraw at about 60 fps.
+The last eleven draw the whole strip at once and keep state between frames, so they don't go in a `seg` zone (zones on top of them still work). The sound and motion styles redraw at about 60 fps.
 
 | Brightness | What happens to `level` |
 | --- | --- |
@@ -150,7 +152,9 @@ The BMI323 runs at 200 Hz with its filter at 50 Hz, and `motion.c` reads it ever
 - **What the styles get.** Tilt along and across the strip (sine of the angle, against the zero pose), heading and turn rate, gravity-free acceleration, a motion energy (20 ms attack, 300 ms release) and a count of knocks (over 1.2 g).
 - **Smoothing in the styles.** The bubble rides a critically damped spring (no jitter, no overshoot), the liquid a lightly damped one (so it sloshes), the tilt colour a 80 ms low-pass, and shake's sparks fade with the same `react` release as the sound styles.
 
-In the host simulation (`test/fusion_test.c`, BMI323 noise and a 0.8 °/s bias) the bias comes out within 0.01 °/s, a 20° tilt reads within 0.02 of sin 20° and never moves more than 0.002 in one sample, a 0.8 g shake along the strip reads as at most 0.03 of false tilt, and a 90° turn reads 90° with no creep afterwards.
+- **Height.** The BMP581 now converts at 20 Hz with 32x pressure oversampling and is read by the same task. Its altitude has no drift but a few cm of noise and some lag; the accelerometer's vertical part (along the fused up vector, minus 1 g), integrated twice, follows a lift at once but drifts within seconds. A third-order complementary filter, crossing over at 0.8 rad/s, takes the slow part from the barometer and the fast part from the accelerometer and learns the accelerometer's vertical offset; each still second also measures that offset directly and stops any vertical creep. Height is relative: it is zeroed when the `height` style is switched on. Limits: the barometer reads the room's air, so a door slamming, an air conditioner or the weather can move it by several Pa (tens of cm); re-zero with `motion hzero` (Zero height here in the panel) if it wanders, and expect steps under ~5 cm to be noisy.
+
+In the host simulation (`test/fusion_test.c`, BMI323 noise and a 0.8 °/s bias) the bias comes out within 0.01 °/s, a 20° tilt reads within 0.02 of sin 20° and never moves more than 0.002 in one sample, a 0.8 g shake along the strip reads as at most 0.03 of false tilt, and a 90° turn reads 90° with no creep afterwards. With 0.5 Pa of barometer noise and an accelerometer reading 0.02 g high, a 30 cm lift in 0.6 s is tracked within 3.4 cm while moving and 2.5 cm while held.
 
 ### Sound processing
 

@@ -21,9 +21,14 @@ static float u0[3] = {0, 0, 1};             // up in the zero pose
 static float across[3];                     // perpendicular to the strip and to u0
 static int cal_n, cal_total;                // samples in this calibration try, and since calibration started
 static int run_n;                           // rest detector: samples in the current quiet run
-static float run_sum[3], run_min[3], run_max[3], run_amin, run_amax;
+static float run_sum[3], run_min[3], run_max[3], run_amin, run_amax, run_asum, rest_g;   // rest_g: |a| over the last still second
 static float cal_acc[3];
 static bool kick_armed = true;
+// Height filter: ALT_W is the crossover in rad/s; below it the barometer wins, above it the accelerometer.
+#define ALT_W 0.8f
+static float h_ref;                         // barometric altitude of height 0, m
+static bool h_have;
+static float acc_off;                       // learnt vertical accelerometer offset, m/s^2
 
 static float dot(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 static float len(const float *a) { return sqrtf(dot(a, a)); }
@@ -67,6 +72,7 @@ static void run_restart(void)
     }
     run_amin = 1e9f;
     run_amax = -1e9f;
+    run_asum = 0;
 }
 
 void fusion_reset(void)
@@ -74,6 +80,8 @@ void fusion_reset(void)
     uint32_t kicks = s.kicks;
     memset(&s, 0, sizeof s);
     s.kicks = kicks;
+    h_have = false;
+    acc_off = 0;
     s.up[2] = 1;
     cal_n = cal_total = 0;
     memset(cal_acc, 0, sizeof cal_acc);
@@ -112,12 +120,14 @@ static bool rest(const float acc[3], const float gyr[3], float mean[3])
         run_min[i] = fminf(run_min[i], gyr[i]);
         run_max[i] = fmaxf(run_max[i], gyr[i]);
     }
+    run_asum += an;
     run_amin = fminf(run_amin, an);
     run_amax = fmaxf(run_amax, an);
     if (run_n < FUSION_HZ) {
         return false;
     }
     bool ok = run_amax - run_amin < STILL_ACC_RANGE;
+    rest_g = run_asum / run_n;
     for (int i = 0; i < 3; i++) {
         ok = ok && run_max[i] - run_min[i] < STILL_RANGE;
         mean[i] = run_sum[i] / run_n;
@@ -156,6 +166,7 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
         cal_n++;
         if (still_second) {
             start(cal_acc, mean, 1);
+            acc_off = (rest_g - 1) * 9.80665f;   // at rest the vertical reading is exactly 1 g: the rest is offset
         } else if (cal_total > FUSION_CAL_GIVEUP_S * FUSION_HZ) {
             start(acc, NULL, 2);                 // never held still: go on, learn the bias at the next rest
         } else if (run_n == 0) {
@@ -170,6 +181,8 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
             s.bias[i] += (mean[i] - s.bias[i]) * k;
         }
         s.state = 1;
+        acc_off += ((rest_g - 1) * 9.80665f - acc_off) * k;
+        s.vz = 0;                                // resting: not climbing either
     }
 
     // Turn up by the gyro: a vector fixed in the room moves as v' = v x w in board coordinates.
@@ -207,6 +220,40 @@ void fusion_update(const float acc[3], const float gyr[3], float dt)
     float e = fmaxf(0, l - 0.03f) * 1.5f + fmaxf(0, wd - 5) / 300;
     float tau = e > s.energy ? 0.02f : 0.3f;
     s.energy += (e - s.energy) * (dt / (tau + dt));
+
+    if (h_have) {                                // height: predict from the vertical acceleration
+        float az = (dot(acc, s.up) - 1) * 9.80665f - acc_off;
+        s.vz += az * dt;
+        s.height += s.vz * dt;
+        if (s.still) {
+            s.vz *= 0.98f;                       // resting: it isn't climbing, whatever the integral says
+        }
+    }
+}
+
+void fusion_baro(float pa, float dt)
+{
+    if (pa < 30000 || pa > 120000 || dt <= 0) {
+        return;
+    }
+    float alt = 44330.0f * (1 - powf(pa / 101325.0f, 0.190295f));
+    if (!h_have) {
+        h_ref = alt;
+        s.height = s.vz = 0;
+        h_have = s.have_height = true;
+        return;
+    }
+    dt = dt > 0.5f ? 0.5f : dt;
+    float err = (alt - h_ref) - s.height;
+    s.height += 3 * ALT_W * err * dt;            // poles all at -ALT_W: no overshoot
+    s.vz += 3 * ALT_W * ALT_W * err * dt;
+    acc_off -= ALT_W * ALT_W * ALT_W * err * dt;
+}
+
+void fusion_zero_height(void)
+{
+    h_ref += s.height;
+    s.height = 0;
 }
 
 void fusion_get(motion_snap_t *o)

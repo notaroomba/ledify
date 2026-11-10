@@ -48,6 +48,7 @@ static void hold(float secs)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
     fusion_set_axis(0);
     fusion_reset();
 
@@ -128,6 +129,40 @@ int main(void)
     printf("then rested: state %d, bias %.2f %.2f %.2f\n", m.state, m.bias[0], m.bias[1], m.bias[2]);
     assert(m.state == 1);
     for (int i = 0; i < 3; i++) assert(fabsf(m.bias[i] - bias[i]) < 0.1f);
+
+    // Height: barometer (BMP581 at 32x: ~0.5 Pa rms assumed, i.e. ~4 cm) every 50 ms, the accelerometer at 200 Hz
+    // reading 0.02 g high. Lift the board 30 cm in 0.6 s, hold, lower it again, and again with a 50 cm lift.
+    up[0] = 0; up[1] = 0; up[2] = 1;
+    fusion_reset();
+    float off[3] = {0, 0, 0.02f};
+    for (int k = 0; k < 1.2f * FUSION_HZ; k++) step(z, off);
+    const float pa0 = 101325, PI = 3.14159265f, T = 0.6f;
+    fusion_baro(pa0, 0.05f);
+    float worst_still = 0, worst_move = 0, truth = 0;
+    int k = 0;
+    for (float t = 0; t < 14; t = ++k * DT) {
+        // d = D (1 - cos(pi u / T)) / 2 over each move: 0 -> 30 cm at 2 s, back at 6 s, 0 -> 50 cm at 9 s
+        float D = 0, u = -1;
+        truth = 0;
+        if (t >= 2 && t < 6) { D = 0.3f; u = t - 2; truth = 0.3f; }
+        if (t >= 6 && t < 9) { D = -0.3f; u = t - 6; truth = 0; }
+        if (t >= 9) { D = 0.5f; u = t - 9; truth = 0.5f; }
+        float a = 0;
+        if (u >= 0 && u < T) {
+            float base = D > 0 ? 0 : 0.3f;
+            truth = base + D * (1 - cosf(PI * u / T)) / 2;
+            a = D / 2 * (PI / T) * (PI / T) * cosf(PI * u / T);
+        }
+        float lin[3] = {0, 0, a / 9.80665f + 0.02f};
+        step(z, lin);
+        if (k % 10 == 0) fusion_baro(pa0 - truth * 11.95f + 0.5f * gauss(), 0.05f);
+        float err = fabsf(m.height - truth);
+        bool moving = u >= 0 && u < T + 1;
+        if (moving) worst_move = fmaxf(worst_move, err); else worst_still = fmaxf(worst_still, err);
+    }
+    printf("height (0.5 Pa baro noise, 0.02 g accel offset): worst error while moving %.1f cm, while held %.1f cm; at 50 cm reads %.1f\n",
+           worst_move * 100, worst_still * 100, m.height * 100);
+    assert(worst_move < 0.05f && worst_still < 0.03f && fabsf(m.height - 0.5f) < 0.02f);
 
     puts("fusion ok");
     return 0;

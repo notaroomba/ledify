@@ -15,6 +15,8 @@ static int baro_dummy;                 // BMP581 reads may need one dummy byte a
 static bool have_opt, have_imu, have_baro;
 static float imu_acc[3], imu_gyr[3];   // the motion task's latest sample: only that task talks to the IMU
 static bool imu_fresh;
+static float baro_t, baro_p;           // likewise the barometer, once the motion task owns it
+static bool baro_owned;
 
 // OPT4001: 16-bit registers, big endian
 static void opt_wr(uint8_t reg, uint16_t v)
@@ -103,12 +105,31 @@ void sensors_init(i2c_master_bus_handle_t bus)
         }
     }
     if (have_baro) {
-        uint8_t v = 0x40 | (3 << 3) | 1;   // pressure on, 8x / 2x oversampling
+        // 32x pressure oversampling at 20 Hz: the height mode needs centimetres (1 Pa is about 8.5 cm), and the
+        // conversion (~15 ms at 32x + 2x) still fits the 50 ms period
+        uint8_t v = 0x40 | (5 << 3) | 1;   // pressure on, 32x / 2x oversampling
         spi_wr(baro, 0x36, &v, 1);
-        v = 0x80 | (0x17 << 2) | 1;        // 10 Hz, normal mode
+        v = 0x80 | (0x15 << 2) | 1;        // 20 Hz, normal mode
         spi_wr(baro, 0x37, &v, 1);
     }
     ESP_LOGI(TAG, "light sensor %d, imu %d, barometer %d", have_opt, have_imu, have_baro);
+}
+
+static bool baro_rd(float *t_c, float *pa)
+{
+    uint8_t b[6];
+    spi_rd(baro, 0x1D, baro_dummy, b, 6);
+    int32_t t = b[0] | (b[1] << 8) | (b[2] << 16);
+    if (t & 0x800000) {
+        t -= 1 << 24;
+    }
+    uint32_t p = b[3] | (b[4] << 8) | (b[5] << 16);
+    if (!p) {
+        return false;
+    }
+    *t_c = t / 65536.0f;
+    *pa = p / 64.0f;
+    return true;
 }
 
 void sensors_read(sensor_data_t *d)
@@ -125,17 +146,12 @@ void sensors_read(sensor_data_t *d)
         memcpy(d->gyr, imu_gyr, sizeof d->gyr);
         d->have_imu = true;
     }
-    if (have_baro) {
-        uint8_t b[6];
-        spi_rd(baro, 0x1D, baro_dummy, b, 6);
-        int32_t t = b[0] | (b[1] << 8) | (b[2] << 16);
-        if (t & 0x800000) {
-            t -= 1 << 24;
-        }
-        uint32_t p = b[3] | (b[4] << 8) | (b[5] << 16);
-        d->temp_c = t / 65536.0f;
-        d->pressure_pa = p / 64.0f;
-        d->have_baro = true;
+    if (have_baro && baro_owned) {
+        d->temp_c = baro_t;
+        d->pressure_pa = baro_p;
+        d->have_baro = baro_p > 0;
+    } else if (have_baro) {
+        d->have_baro = baro_rd(&d->temp_c, &d->pressure_pa);
     }
 }
 
@@ -162,5 +178,28 @@ bool sensors_imu_sample(float acc[3], float gyr[3])
     memcpy(imu_acc, acc, sizeof imu_acc);
     memcpy(imu_gyr, gyr, sizeof imu_gyr);
     imu_fresh = true;
+    return true;
+}
+
+bool sensors_have_baro(void)
+{
+    return have_baro;
+}
+
+void sensors_claim_baro(void)
+{
+    baro_owned = have_baro;
+}
+
+bool sensors_baro_sample(float *temp_c, float *pa)
+{
+    if (!have_baro) {
+        return false;
+    }
+    if (!baro_rd(temp_c, pa)) {
+        return false;
+    }
+    baro_t = *temp_c;
+    baro_p = *pa;
     return true;
 }

@@ -11,7 +11,7 @@
 static const char *TAG = "motion";
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static motion_snap_t snap;
-static volatile bool want_cal, want_zero;
+static volatile bool want_cal, want_zero, want_hzero;
 static volatile int want_axis = -1;
 static bool running;
 
@@ -20,6 +20,8 @@ static void motion_task(void *arg)
     TickType_t wake = xTaskGetTickCount();
     int64_t last = esp_timer_get_time();
     uint8_t was_state = 0;
+    int n = 0;
+    int64_t last_baro = 0;
     for (;;) {
         xTaskDelayUntil(&wake, pdMS_TO_TICKS(1000 / FUSION_HZ));
         if (want_axis >= 0) {
@@ -34,6 +36,18 @@ static void motion_task(void *arg)
         if (want_zero) {
             want_zero = false;
             fusion_zero();
+        }
+        if (want_hzero) {
+            want_hzero = false;
+            fusion_zero_height();
+        }
+        if (++n % (FUSION_HZ / 20) == 0) {               // the barometer converts at 20 Hz
+            float t, pa;
+            int64_t tb = esp_timer_get_time();
+            if (sensors_baro_sample(&t, &pa)) {
+                fusion_baro(pa, last_baro ? (tb - last_baro) / 1e6f : 0);
+                last_baro = tb;
+            }
         }
         float acc[3], gyr[3];
         int64_t now = esp_timer_get_time();
@@ -65,6 +79,7 @@ bool motion_init(void)
         return false;
     }
     fusion_reset();
+    sensors_claim_baro();
     xTaskCreate(motion_task, "motion", 3072, NULL, 4, NULL);
     running = true;
     return true;
@@ -99,4 +114,9 @@ void motion_set_axis(int axis)
     } else {
         fusion_set_axis(axis);
     }
+}
+
+void motion_zero_height(void)
+{
+    want_hzero = true;
 }

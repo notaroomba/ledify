@@ -68,6 +68,7 @@ const AXES = [[0, '+x'], [1, '+y'], [2, '+z'], [3, '−x'], [4, '−y'], [5, '�
 const MOTION_STATE = ['calibrating, hold it still', 'calibrated', 'not calibrated yet, let it rest a second'];
 function MotionSettings() {
   const [axis, setAxis] = optimistic('axis', () => state().axis);
+  const [hstep, setHstep] = optimistic('hstep', () => state().hstep);
   const mo = () => ui.live.mo;
   return <Group title="Motion setup">
     <div class="row"><span class="hint">Strip runs along the board's</span><Chips items={AXES} value={axis} onPick={v => { setAxis(v); send('axis ' + v); }} /></div>
@@ -76,6 +77,13 @@ function MotionSettings() {
       <button type="button" class="btn" onClick={() => send('motion cal')}>Recalibrate</button>
       <span class="hint">{MOTION_STATE[state().motion] ?? ''}{mo() ? ` · tilt ${Math.round(Math.asin(Math.max(-1, Math.min(1, mo()[0] / 100))) * 180 / Math.PI)}° · heading ${mo()[2]}°` : ''}</span>
     </div>
+    <Show when={state().hstep !== undefined}>
+      <Slider label="Height step" min={1} max={100} value={hstep} set={setHstep} send={v => 'hstep ' + v} fmt={v => v + ' cm'} />
+      <div class="row">
+        <button type="button" class="btn" onClick={() => send('motion hzero')}>Zero height here</button>
+        <span class="hint">{mo() && mo()[4] !== undefined ? `height ${mo()[4] > 0 ? '+' : ''}${mo()[4]} cm · step ${Math.floor(mo()[4] / Math.max(1, hstep() || 10))}` : 'height comes from the barometer'}</span>
+      </div>
+    </Show>
   </Group>;
 }
 

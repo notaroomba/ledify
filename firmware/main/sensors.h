@@ -17,3 +17,7 @@ void sensors_read(sensor_data_t *d);
 // latest sample. SPI devices may only be used from one task each.
 bool sensors_have_imu(void);
 bool sensors_imu_sample(float acc[3], float gyr[3]);
+// The barometer too, once the motion task has started reading it (20 Hz, for the height mode).
+bool sensors_have_baro(void);
+void sensors_claim_baro(void);       // call before the motion task starts: from then on only it reads the barometer
+bool sensors_baro_sample(float *temp_c, float *pa);
