@@ -50,6 +50,8 @@ I also wrote down what I want for rev 2 in the [README](README.md): current sens
 
 # 10/2026 - Fixing the Short and First Light
 
+_Time spent: 5h_
+
 So I went back and found the short on one of the boards and fixed it, and then I wired it up to a strip on the VCC, SIG and GND pads and plugged in USB-C
 
 ![image](assets/journal/board_wired.jpeg)
