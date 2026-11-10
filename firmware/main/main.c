@@ -2,8 +2,10 @@
 //
 // Text commands (USB serial console, BLE UART app, or MQTT topic ledify/<id>/cmd):
 //   on | off | rgb R G B | level N | count N | type ws2812|ws2811|sk6812|sk6812w|ws2816
-//   mode solid|rainbow|temp|spectrum|meter|eq|ripple|mirror|chroma|flow|sound|vu|pulse|auto     presets, the Home Assistant effects
-//   color solid|rainbow|temp|spectrum|meter|eq|ripple|mirror|chroma|flow | bright level|sound | overlay none|vu|pulse | auto on|off
+//   mode solid|rainbow|temp|spectrum|meter|eq|ripple|mirror|chroma|flow|bubble|tilt|shake|spin|slosh|sound|vu|pulse|auto
+//                                                  presets, the Home Assistant effects
+//   color solid|rainbow|temp|spectrum|meter|eq|...|slosh | bright level|sound | overlay none|vu|pulse | auto on|off
+//   motion [N|cal|zero] | axis 0-5                 IMU: snapshot (or print it N s), recalibrate, level here; strip axis
 //   gain N | lux LO HI | night N | temp LO HI      saved tunables (or one at a time: gain N, lux_lo N, ...)
 //   temp 21.5                                      feed a temperature in for the temp colour
 //   live N (stream loudness/bands N s) | audio L B M T P (feed from the panel) | volt 5 | volt 12 yes | status | pd | net | help
@@ -13,6 +15,7 @@
 // A frame is colour x brightness x overlay, drawn by leds_frame():
 //   colour      solid | rainbow | temp (blue-white-red from the temperature) | spectrum (bass/mid/treble bars) | meter
 //               | eq | ripple | mirror | chroma | flow (whole-strip sound styles, fx.c)
+//               | bubble | tilt | shake | spin | slosh (whole-strip motion styles, fx.c, from the IMU via fusion.c)
 //   brightness  level, scaled by the lux curve when auto is on, by the microphone when bright is sound
 //   overlay     none | vu (lit length follows the sound) | pulse (flash on each beat, a quarter in between)
 #include <stdio.h>
@@ -37,6 +40,7 @@
 #include "pd.h"
 #include "sensors.h"
 #include "mic.h"
+#include "motion.h"
 #include "ble.h"
 #include "net.h"
 #include "ota.h"
@@ -51,10 +55,11 @@ static const char *TAG = "ledify";
 #define PULSE_FLOOR 64         // brightness between beats, out of 255
 
 typedef enum { OVER_NONE, OVER_VU, OVER_PULSE } overlay_t;
-static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow"};
-#define N_COLORS 12
+static const char *color_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow",
+                                     "bubble", "tilt", "shake", "spin", "slosh"};
+#define N_COLORS 17
 static const char *overlay_names[] = {"none", "vu", "pulse"};
-#define MODES "solid|rainbow|temp|spectrum|meter|palette|cover|eq|ripple|mirror|chroma|flow|sound|vu|pulse|auto"
+#define MODES "solid|rainbow|temp|spectrum|meter|palette|cover|eq|ripple|mirror|chroma|flow|bubble|tilt|shake|spin|slosh|sound|vu|pulse|auto"
 
 static leds_color_t color;
 static overlay_t overlay;
@@ -152,6 +157,7 @@ static int hot_scale = 255;                 // brightness left by the thermal li
 static float board_c = -100;                // latest board temperature
 static int64_t restart_at;                  // a saved network setting restarts the board shortly after
 static int64_t meter_until, meter_next;     // "mic N": print the mic level on the console 4 times a second
+static int64_t motion_until, motion_next;   // "motion N": the same for the IMU
 static int blink_left;                      // "blink N": half-periods of blue flashing still to go, 0 = not blinking
 static int64_t blink_next;
 static bool blink_lit, blink_was_on;        // blink_was_on: the output was on before, so leave it on afterwards
@@ -169,9 +175,9 @@ static int16_t limit;                       // see settings[]
 static int16_t pdmax = 20000;
 static int16_t pddelay = PD_START_DELAY_MS;
 static int16_t droop;                       // see settings[]
-static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60, predict = 1;
+static int16_t tmax = THERMAL_MAX_C, fade = FADE_MS, scroll, react = 60, predict = 1, axis;
 static int64_t dirty_at;                    // settings changed by a slider: written to NVS once they settle
-enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, N_SETTINGS };
+enum { S_GAIN, S_LUX_LO, S_LUX_HI, S_NIGHT, S_TEMP_LO, S_TEMP_HI, S_LIMIT, S_PDMAX, S_PDDELAY, S_DROOP, S_TMAX, S_FADE, S_SCROLL, S_REACT, S_PREDICT, S_AXIS, N_SETTINGS };
 static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[N_SETTINGS] = {   // keep in step with nums[] in net.c
     {"gain", &gain, 1, 100},
     {"lux_lo", &lux_lo, 0, 10000},
@@ -188,6 +194,7 @@ static const struct { const char *key; int16_t *val; int16_t lo, hi; } settings[
     {"scroll", &scroll, -200, 200},          // gradient/stripes travel, pixels per second; negative = the other way
     {"react", &react, 1, 100},               // how fast the sound styles fall back: release ~1 s at 1, 40 ms at 100
     {"predict", &predict, 0, 1},             // 1 = once the tempo is steady, light beats on time from the tempo tracker
+    {"axis", &axis, 0, 5},                   // board axis along the strip for the motion styles: +x +y +z -x -y -z
 };
 
 // Strip length, chip type and the tunables live in NVS next to the Wi-Fi credentials (namespace "cfg").
@@ -403,18 +410,40 @@ static int lookup(const char *name, const char *const *names, int n)
 
 static bool uses_mic(void)
 {
-    return sound_on || overlay != OVER_NONE || color == COLOR_SPECTRUM || LED_IS_FX(color);
+    return sound_on || overlay != OVER_NONE || color == COLOR_SPECTRUM || LED_IS_SOUND(color);
+}
+
+static bool have_imu;
+
+static bool uses_motion(void)
+{
+    return LED_IS_MOTION(color);
 }
 
 static const char *mic_note(void)
 {
-    return uses_mic() && !have_mic ? "ok, no mic" : "ok";
+    return uses_mic() && !have_mic ? "ok, no mic" : uses_motion() && !have_imu ? "ok, no imu" : "ok";
 }
 
 // What Home Assistant sees as the effect: the overlay if there is one, else sound, else the colour source.
 static const char *effect_name(void)
 {
     return overlay != OVER_NONE ? overlay_names[overlay] : sound_on ? "sound" : color_names[color];
+}
+
+static const char *motion_state_name(uint8_t st)
+{
+    return st == 0 ? "calibrating" : st == 1 ? "calibrated" : "uncalibrated";
+}
+
+static void motion_json(char *out, size_t n)
+{
+    motion_snap_t m;
+    motion_snapshot(&m);
+    snprintf(out, n, "{\"motion\":\"%s\",\"still\":%d,\"tilt\":%.3f,\"side\":%.3f,\"heading\":%.1f,\"yaw_rate\":%.1f,"
+             "\"energy\":%.3f,\"kicks\":%lu,\"up\":[%.3f,%.3f,%.3f],\"bias\":[%.2f,%.2f,%.2f],\"axis\":%d}",
+             motion_state_name(m.state), m.still, m.tilt, m.side, m.heading, m.yaw_rate, m.energy, (unsigned long)m.kicks,
+             m.up[0], m.up[1], m.up[2], m.bias[0], m.bias[1], m.bias[2], axis);
 }
 
 // Presets: a colour resets the rest, vu brings its meter colours, sound and pulse keep whatever colour is
@@ -468,6 +497,7 @@ static bool set_setting(int i, int v)
     leds_set_scroll(scroll);
     leds_set_react(react);
     mic_set_predict(predict);
+    motion_set_axis(axis);
     if (i == S_PDMAX) {
         pd_set_max_mv(pdmax);
         pd_request(0);                       // renegotiate under the new ceiling
@@ -540,6 +570,9 @@ static void frame(void)
     mic_snapshot(&snap);
     uint8_t *bands = snap.bands;
     leds_set_audio(&snap);
+    motion_snap_t mo;
+    motion_snapshot(&mo);
+    leds_set_motion(&mo);
     mic_set_lead((int32_t)leds_wire_us() + 1500);                // predicted beats fire this early: render + wire time
     if (snap.at) {                                               // audio-to-light delay: age of the analysis, plus half a
         int64_t age = esp_timer_get_time() - snap.at;            // block (the samples' mean age), plus the wire time
@@ -579,7 +612,7 @@ static void frame(void)
     }
     int count = leds_get_count();
     leds_color_t c = leds_stream_active() ? COLOR_STREAM : color;
-    leds_frame(c, lvl, overlay == OVER_VU ? count * mic_loud() / 255 : count, bands, uses_mic() || c == COLOR_STREAM);
+    leds_frame(c, lvl, overlay == OVER_VU ? count * mic_loud() / 255 : count, bands, uses_mic() || uses_motion() || c == COLOR_STREAM);
 }
 
 // Styles that move redraw every FRAME_MS; a still frame only needs the once-a-second resend.
@@ -589,13 +622,13 @@ static bool live(void)
 }
 
 // Sound styles redraw every SOUND_FRAME_MS, or as fast as the wire allows on a long strip, so a beat reaches the
-// LEDs within about one frame of the 16 ms analysis.
+// LEDs within about one frame of the 16 ms analysis. Motion styles too, so movement looks fluid.
 static int64_t frame_period_us(void)
 {
     if (!live()) {
         return 1000000;
     }
-    if (!uses_mic()) {
+    if (!uses_mic() && !uses_motion()) {
         return FRAME_MS * 1000;
     }
     int64_t wire = leds_wire_us() + 2000;
@@ -652,8 +685,10 @@ static void status(char *out, size_t n)
         w += snprintf(out + w, n - w, ",\"temp_in\":%.2f", temp_in);
     }
     if (d.have_imu) {
-        w += snprintf(out + w, n - w, ",\"acc\":[%.2f,%.2f,%.2f],\"gyr\":[%.1f,%.1f,%.1f]",
-                      d.acc[0], d.acc[1], d.acc[2], d.gyr[0], d.gyr[1], d.gyr[2]);
+        motion_snap_t m;
+        motion_snapshot(&m);
+        w += snprintf(out + w, n - w, ",\"acc\":[%.2f,%.2f,%.2f],\"gyr\":[%.1f,%.1f,%.1f],\"motion\":%d",
+                      d.acc[0], d.acc[1], d.acc[2], d.gyr[0], d.gyr[1], d.gyr[2], m.state);
     }
     if (have_mic) {
         w += snprintf(out + w, n - w, ",\"sound_db\":%.1f,\"db_peak\":%.0f,\"loud\":%d,\"bpm\":%u,\"lock\":%u", mic_db(), mic_db_peak(), mic_loud(),
@@ -951,6 +986,25 @@ static void handle(char *line)
         meter_until = s ? esp_timer_get_time() + (int64_t)s * 1000000 : 0;
         meter_next = 0;
         reply("ok, see the console");
+    } else if (!strcmp(tok[0], "motion") && n <= 2) {             // motion: snapshot | N: on the console for N s | cal | zero
+        if (!have_imu) {
+            reply("err no imu");
+        } else if (n == 2 && !strcmp(tok[1], "cal")) {
+            motion_cal();
+            reply("ok, hold the board still for a second");
+        } else if (n == 2 && !strcmp(tok[1], "zero")) {
+            motion_zero();
+            reply("ok, level here");
+        } else if (n == 2) {
+            int s = atoi(tok[1]);
+            s = s < 0 ? 0 : s > 300 ? 300 : s;
+            motion_until = s ? esp_timer_get_time() + (int64_t)s * 1000000 : 0;
+            motion_next = 0;
+            reply("ok, see the console");
+        } else {
+            motion_json(out, sizeof out);
+            reply(out);
+        }
     } else if (!strcmp(tok[0], "micraw")) {                       // diagnostics on the live topic
         mic_raw_json(out, sizeof out);
         net_publish_live(out);
@@ -1114,7 +1168,7 @@ static void handle(char *line)
         reply("on off blink<n> rgb<r g b> level<n> count<n> type<" LED_TYPES "> mode<" MODES "> color<" LED_COLORS "> "
               "bright<level|sound> overlay<none|vu|pulse> auto<on|off> gain<n> lux<lo hi> night<n> temp<lo hi> temp<c> tmax<c> fade<ms> "
               "volt<5|12 yes> droop<n> palette<hex[@pct],..> cover<hex[@pct],..> stripe<0|px|px,px,..> scroll<px/s> seg<n a b [color [hex]]|del n|off> sleep<min> rise<min> tz<posix> sched<add hh:mm cmd|del n|clear> "
-              "name<host> live<s> listen<s> mic<s> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
+              "name<host> live<s> listen<s> mic<s> motion<|s|cal|zero> axis<0-5> audio<l b m t p [spec]> status pd net ota<url> otabase<url|any> wifi<ssid pass> wifi2<ssid pass|ssid -|list|off|del x|try x> mqtt<url [user pass]>");
     } else {
         reply("err, send help");
     }
@@ -1169,8 +1223,10 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(pddelay));
     pd_init(bus);
     sensors_init(bus);
+    motion_set_axis(axis);
+    have_imu = motion_init();                // calibrates by itself once the board has been still for a second
     have_mic = mic_init();
-    ESP_LOGI(TAG, "microphone %d", have_mic);
+    ESP_LOGI(TAG, "microphone %d, imu %d", have_mic, have_imu);
 
     cmd_q = xQueueCreate(8, sizeof(cmd_t));
     xTaskCreate(console_task, "console", 3072, NULL, 3, NULL);
@@ -1308,10 +1364,18 @@ void app_main(void)
                      dbfs + MIC_DB_FULL_SCALE, (long)mn, (long)mx, (long)mean, bars);
             meter_next = now + 250000;
         }
+        if (now < motion_until && now >= motion_next) {        // "motion N": the fused numbers 4 times a second
+            motion_snap_t m;
+            motion_snapshot(&m);
+            ESP_LOGI(TAG, "motion %s%s tilt %+.2f side %+.2f heading %5.1f turn %+6.1f deg/s energy %.2f kicks %lu",
+                     motion_state_name(m.state), m.still ? " still" : "", m.tilt, m.side, m.heading, m.yaw_rate, m.energy,
+                     (unsigned long)m.kicks);
+            motion_next = now + 250000;
+        }
         if (now < live_until && now - last_live > LIVE_MS * 1000LL) {
             mic_snap_t a;
             mic_snapshot(&a);                                     // the mic, or what the panel feeds in
-            char live[256];
+            char live[320];
             int w = snprintf(live, sizeof live, "{\"loud\":%d,\"bands\":[%d,%d,%d],\"pulse\":%d,\"db\":%.0f,\"cap\":%d,\"lat\":%lu,"
                              "\"bpm\":%u,\"lock\":%u,\"spec\":[",
                              a.loud, a.bands[0], a.bands[1], a.bands[2], a.pulse, have_mic ? mic_db() : 0.0f, leds_get_cap(),
@@ -1319,7 +1383,14 @@ void app_main(void)
             for (int k = 0; k < MIC_SPEC; k++) {
                 w += snprintf(live + w, sizeof live - w, "%s%d", k ? "," : "", a.spec[k]);
             }
-            snprintf(live + w, sizeof live - w, "]}");
+            w += snprintf(live + w, sizeof live - w, "]");
+            if (have_imu) {                                       // motion for the panel's previews: tilt, side, energy x100
+                motion_snap_t m;
+                motion_snapshot(&m);
+                w += snprintf(live + w, sizeof live - w, ",\"mo\":[%d,%d,%d,%d]", (int)(m.tilt * 100), (int)(m.side * 100),
+                              (int)m.heading, (int)(m.energy * 100));
+            }
+            snprintf(live + w, sizeof live - w, "}");
             net_publish_live(live);
             web_publish_live(live);
             last_live = now;
@@ -1345,6 +1416,6 @@ void app_main(void)
             frames++;
             last_frame = now;
         }
-        vTaskDelay(pdMS_TO_TICKS(power && uses_mic() ? 1 : 5));   // sound styles: draw within a millisecond of due
+        vTaskDelay(pdMS_TO_TICKS(power && (uses_mic() || uses_motion()) ? 1 : 5));   // sound and motion styles: draw on time
     }
 }

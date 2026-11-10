@@ -49,8 +49,9 @@ static bool settled = true;
 static int64_t last_us;
 typedef struct { uint16_t a, b; leds_color_t c; uint8_t r, g, bl; bool on; } seg_t;
 static seg_t segs[LED_MAX_SEGS];
-static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "stream"};
+static const char *src_names[] = {"solid", "rainbow", "temp", "spectrum", "meter", "palette", "cover", "eq", "ripple", "mirror", "chroma", "flow", "bubble", "tilt", "shake", "spin", "slosh", "stream"};
 static mic_snap_t audio;
+static motion_snap_t motion;
 static int64_t fx_us;
 static uint8_t stream_fb[MAX_LEDS][3];
 static int64_t stream_at;
@@ -330,12 +331,12 @@ void leds_frame(leds_color_t c, uint8_t lvl, uint16_t lit, const uint8_t bands[3
         hue++;
     }
     uint32_t sum = 0;
-    if (LED_IS_FX(c)) {                                          // whole-strip sound style: draws fb in one go
+    if (LED_IS_FX(c)) {                                          // whole-strip sound or motion style: draws fb in one go
         int64_t t = esp_timer_get_time();
         uint32_t dt = fx_us ? (uint32_t)((t - fx_us) / 1000) : FRAME_MS;
         fx_us = t;
         uint8_t base[3] = {cur_r, cur_g, cur_b};
-        fx_render((fx_t)(c - COLOR_EQ), &audio, fb, count, dt, base);
+        fx_render((fx_t)(c - COLOR_EQ), &audio, &motion, fb, count, dt, base);
     }
     for (int i = 0; i < count; i++) {
         uint8_t *p = fb[i];
@@ -609,6 +610,11 @@ bool leds_stream_active(void)
 void leds_set_audio(const struct mic_snap *a)
 {
     audio = *a;
+}
+
+void leds_set_motion(const struct motion_snap *m)
+{
+    motion = *m;
 }
 
 void leds_set_react(uint8_t r)

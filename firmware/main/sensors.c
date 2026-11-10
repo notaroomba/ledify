@@ -1,4 +1,5 @@
 // OPT4001 light sensor (I2C), BMI323 IMU and BMP581 barometer (SPI).
+#include <stdint.h>
 #include <string.h>
 #include "sensors.h"
 #include "board.h"
@@ -12,6 +13,8 @@ static i2c_master_dev_handle_t opt;
 static spi_device_handle_t imu, baro;
 static int baro_dummy;                 // BMP581 reads may need one dummy byte after the address
 static bool have_opt, have_imu, have_baro;
+static float imu_acc[3], imu_gyr[3];   // the motion task's latest sample: only that task talks to the IMU
+static bool imu_fresh;
 
 // OPT4001: 16-bit registers, big endian
 static void opt_wr(uint8_t reg, uint16_t v)
@@ -83,8 +86,9 @@ void sensors_init(i2c_master_bus_handle_t bus)
     spi_rd(imu, 0x00, 1, b, 2);
     have_imu = (b[0] == 0x43);
     if (have_imu) {
-        uint8_t acc[2] = {0x18, 0x40};     // normal mode, +/-4 g, 100 Hz
-        uint8_t gyr[2] = {0x48, 0x40};     // normal mode, +/-2000 dps, 100 Hz
+        // 200 Hz with the filter at ODR/4 (50 Hz): the motion styles sample at 200 Hz, and nothing a hand does is faster
+        uint8_t acc[2] = {0x99, 0x40};     // normal mode, +/-4 g, 200 Hz, bw ODR/4
+        uint8_t gyr[2] = {0xC9, 0x40};     // normal mode, +/-2000 dps, 200 Hz, bw ODR/4
         spi_wr(imu, 0x20, acc, 2);
         spi_wr(imu, 0x21, gyr, 2);
     }
@@ -116,13 +120,9 @@ void sensors_read(sensor_data_t *d)
         d->lux = (float)(mant << (m >> 12)) * 0.0004f;    // DNP package scale
         d->have_lux = true;
     }
-    if (have_imu) {
-        uint8_t b[12];
-        spi_rd(imu, 0x03, 1, b, 12);
-        for (int i = 0; i < 3; i++) {
-            d->acc[i] = (int16_t)(b[2 * i] | (b[2 * i + 1] << 8)) / 8192.0f;
-            d->gyr[i] = (int16_t)(b[6 + 2 * i] | (b[7 + 2 * i] << 8)) / 16.384f;
-        }
+    if (have_imu && imu_fresh) {
+        memcpy(d->acc, imu_acc, sizeof d->acc);   // a torn copy only mixes two samples 5 ms apart
+        memcpy(d->gyr, imu_gyr, sizeof d->gyr);
         d->have_imu = true;
     }
     if (have_baro) {
@@ -137,4 +137,30 @@ void sensors_read(sensor_data_t *d)
         d->pressure_pa = p / 64.0f;
         d->have_baro = true;
     }
+}
+
+bool sensors_have_imu(void)
+{
+    return have_imu;
+}
+
+bool sensors_imu_sample(float acc[3], float gyr[3])
+{
+    if (!have_imu) {
+        return false;
+    }
+    uint8_t b[12];
+    spi_rd(imu, 0x03, 1, b, 12);
+    for (int i = 0; i < 3; i++) {
+        int16_t a = (int16_t)(b[2 * i] | (b[2 * i + 1] << 8)), g = (int16_t)(b[6 + 2 * i] | (b[7 + 2 * i] << 8));
+        if (a == INT16_MIN || g == INT16_MIN) {
+            return false;                  // 0x8000: no valid data yet
+        }
+        acc[i] = a / 8192.0f;
+        gyr[i] = g / 16.384f;
+    }
+    memcpy(imu_acc, acc, sizeof imu_acc);
+    memcpy(imu_gyr, gyr, sizeof imu_gyr);
+    imu_fresh = true;
+    return true;
 }

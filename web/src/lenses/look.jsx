@@ -1,6 +1,6 @@
 // Colour, Effects and Gradient: what the strip shows.
 import { For, Index, Show, createSignal, onMount, onCleanup } from 'solid-js';
-import { state, opt, send, optimistic } from '../store';
+import { state, opt, send, optimistic, ui } from '../store';
 import { act } from '../actions';
 import { grad } from '../grad';
 import { inputs, paint } from '../engine';
@@ -62,6 +62,23 @@ function Preview(p) {
   return <canvas ref={cv} width="224" height="16" class="fx-preview" aria-hidden="true" />;
 }
 
+// Which way the strip leaves the board, and the IMU's calibration. The board calibrates itself after boot once it
+// has been still for a second; "Level here" makes the way it sits now count as flat.
+const AXES = [[0, '+x'], [1, '+y'], [2, '+z'], [3, '−x'], [4, '−y'], [5, '−z']];
+const MOTION_STATE = ['calibrating, hold it still', 'calibrated', 'not calibrated yet, let it rest a second'];
+function MotionSettings() {
+  const [axis, setAxis] = optimistic('axis', () => state().axis);
+  const mo = () => ui.live.mo;
+  return <Group title="Motion setup">
+    <div class="row"><span class="hint">Strip runs along the board's</span><Chips items={AXES} value={axis} onPick={v => { setAxis(v); send('axis ' + v); }} /></div>
+    <div class="row mt-2">
+      <button type="button" class="btn" onClick={() => send('motion zero')}>Level here</button>
+      <button type="button" class="btn" onClick={() => send('motion cal')}>Recalibrate</button>
+      <span class="hint">{MOTION_STATE[state().motion] ?? ''}{mo() ? ` · tilt ${Math.round(Math.asin(Math.max(-1, Math.min(1, mo()[0] / 100))) * 180 / Math.PI)}° · heading ${mo()[2]}°` : ''}</span>
+    </div>
+  </Group>;
+}
+
 export function EffectsLens() {
   const [auto, setAuto] = optimistic('auto', () => state().auto);
   const [luxLo, setLuxLo] = optimistic('lux_lo', () => state().lux_lo);
@@ -75,6 +92,10 @@ export function EffectsLens() {
   return <>
     <Group title="Colour"><div class="fx-grid"><For each={avail('colour')}>{card}</For></div></Group>
     <Group title="Sound" aside="from the board's mic, or music on this device (Sound lens)"><div class="fx-grid"><For each={avail('sound')}>{card}</For></div></Group>
+    <Show when={avail('motion').length}>
+      <Group title="Motion" aside="from the board's accelerometer and gyroscope"><div class="fx-grid"><For each={avail('motion')}>{card}</For></div></Group>
+      <MotionSettings />
+    </Show>
     <Group title="On top of any effect">
       <Chips items={[['none', 'nothing'], ['vu', 'VU length'], ['pulse', 'beat pulse']]} value={opt.overlay} onPick={act.overlay} />
     </Group>

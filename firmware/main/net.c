@@ -209,14 +209,14 @@ static void queue_prefixed(const char *cmd, const char *data, int len)
 // One retained discovery message per entity so Home Assistant creates them on its own.
 static void discover(void)
 {
-    char topic[96], msg[640], devs[160], cmd[64];
+    char topic[96], msg[768], devs[160], cmd[64];
     snprintf(devs, sizeof devs, "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Ledify\",\"mf\":\"notaroomba\",\"mdl\":\"Ledify rev1\"}", id);
 
     snprintf(topic, sizeof topic, "homeassistant/light/%s/config", id);
     snprintf(msg, sizeof msg,
              "{\"name\":\"Ledify\",\"uniq_id\":\"%s_light\",\"schema\":\"json\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\","
              "\"avty_t\":\"%s\",\"brightness\":true,\"supported_color_modes\":[\"rgb\"],\"effect\":true,"
-             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"palette\",\"cover\",\"eq\",\"ripple\",\"mirror\",\"chroma\",\"flow\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
+             "\"effect_list\":[\"solid\",\"rainbow\",\"temp\",\"spectrum\",\"meter\",\"palette\",\"cover\",\"eq\",\"ripple\",\"mirror\",\"chroma\",\"flow\",\"bubble\",\"tilt\",\"shake\",\"spin\",\"slosh\",\"sound\",\"vu\",\"pulse\"],%s}",   // keep in step with MODES in main.c
              id, t_set, t_lstate, t_avail, devs);
     esp_mqtt_client_publish(mqtt, topic, msg, 0, 1, 1);
 

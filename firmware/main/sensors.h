@@ -13,3 +13,7 @@ typedef struct {
 
 void sensors_init(i2c_master_bus_handle_t bus);
 void sensors_read(sensor_data_t *d);
+// The IMU belongs to the motion task (motion.c): it reads here 200 times a second, sensors_read() hands out its
+// latest sample. SPI devices may only be used from one task each.
+bool sensors_have_imu(void);
+bool sensors_imu_sample(float acc[3], float gyr[3]);

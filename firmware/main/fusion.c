@@ -1,0 +1,215 @@
+// IMU fusion: see fusion.h. A few dozen float operations per sample at 200 Hz, a couple of percent of the C6's
+// time in software floating point.
+#include <math.h>
+#include <string.h>
+#include "fusion.h"
+
+#define D2R 0.017453293f
+#define KP 2.0f                 // pull towards the accelerometer, 1/s: a 0.5 s time constant
+#define TRUST_G 0.2f            // the pull fades to nothing as |a| strays this far from 1 g
+#define STILL_GYR 3.0f          // deg/s from the bias: anything faster is not resting
+#define STILL_ACC 0.05f         // g from 1 g
+#define STILL_RANGE 2.5f        // a still second may wander this much per gyro axis (noise, a desk's tremble)
+#define STILL_ACC_RANGE 0.03f   // and the accelerometer's magnitude this much
+#define KICK_G 1.2f             // a jolt (a knock, a sharp flick): gravity-free acceleration over this
+#define KICK_REARM_G 0.4f       // and back under this before the next one counts
+
+static const float axes[6][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {-1, 0, 0}, {0, -1, 0}, {0, 0, -1}};
+static int axis;
+static motion_snap_t s;
+static float u0[3] = {0, 0, 1};             // up in the zero pose
+static float across[3];                     // perpendicular to the strip and to u0
+static int cal_n, cal_total;                // samples in this calibration try, and since calibration started
+static int run_n;                           // rest detector: samples in the current quiet run
+static float run_sum[3], run_min[3], run_max[3], run_amin, run_amax;
+static float cal_acc[3];
+static bool kick_armed = true;
+
+static float dot(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+static float len(const float *a) { return sqrtf(dot(a, a)); }
+static float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
+
+static void cross(const float *a, const float *b, float *o)
+{
+    o[0] = a[1] * b[2] - a[2] * b[1];
+    o[1] = a[2] * b[0] - a[0] * b[2];
+    o[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static void norm(float *a)
+{
+    float l = len(a);
+    if (l > 1e-6f) {
+        a[0] /= l;
+        a[1] /= l;
+        a[2] /= l;
+    }
+}
+
+// The across direction: perpendicular to the strip and to up in the zero pose. If the strip itself points up,
+// any perpendicular will do.
+static void set_across(void)
+{
+    cross(axes[axis], u0, across);
+    if (len(across) < 0.2f) {
+        cross(axes[axis], axes[(axis + 1) % 3], across);
+    }
+    norm(across);
+}
+
+static void run_restart(void)
+{
+    run_n = 0;
+    for (int i = 0; i < 3; i++) {
+        run_sum[i] = 0;
+        run_min[i] = 1e9f;
+        run_max[i] = -1e9f;
+    }
+    run_amin = 1e9f;
+    run_amax = -1e9f;
+}
+
+void fusion_reset(void)
+{
+    uint32_t kicks = s.kicks;
+    memset(&s, 0, sizeof s);
+    s.kicks = kicks;
+    s.up[2] = 1;
+    cal_n = cal_total = 0;
+    memset(cal_acc, 0, sizeof cal_acc);
+    run_restart();
+}
+
+void fusion_zero(void)
+{
+    memcpy(u0, s.up, sizeof u0);
+    s.heading = 0;
+    set_across();
+}
+
+void fusion_set_axis(int a)
+{
+    axis = a < 0 || a > 5 ? 0 : a;
+    set_across();
+}
+
+// Feed the rest detector one sample; returns true each time a whole still second has gone by, with its mean gyro.
+static bool rest(const float acc[3], const float gyr[3], float mean[3])
+{
+    float an = len(acc), dev[3] = {gyr[0] - s.bias[0], gyr[1] - s.bias[1], gyr[2] - s.bias[2]};
+    bool quiet = len(dev) < STILL_GYR && fabsf(an - 1) < STILL_ACC;
+    if (s.state == 0) {
+        quiet = fabsf(an - 1) < 0.15f;          // no bias known yet: judge by the spread alone
+    }
+    if (!quiet) {
+        run_restart();
+        s.still = false;
+        return false;
+    }
+    run_n++;
+    for (int i = 0; i < 3; i++) {
+        run_sum[i] += gyr[i];
+        run_min[i] = fminf(run_min[i], gyr[i]);
+        run_max[i] = fmaxf(run_max[i], gyr[i]);
+    }
+    run_amin = fminf(run_amin, an);
+    run_amax = fmaxf(run_amax, an);
+    if (run_n < FUSION_HZ) {
+        return false;
+    }
+    bool ok = run_amax - run_amin < STILL_ACC_RANGE;
+    for (int i = 0; i < 3; i++) {
+        ok = ok && run_max[i] - run_min[i] < STILL_RANGE;
+        mean[i] = run_sum[i] / run_n;
+    }
+    run_restart();
+    s.still = ok;
+    return ok;
+}
+
+static void start(const float up[3], const float *bias, uint8_t state)
+{
+    memcpy(s.up, up, sizeof s.up);
+    norm(s.up);
+    if (bias) {
+        memcpy(s.bias, bias, sizeof s.bias);
+    }
+    s.state = state;
+    fusion_zero();
+}
+
+void fusion_update(const float acc[3], const float gyr[3], float dt)
+{
+    float an = len(acc), mean[3];
+    if (an < 0.05f || dt <= 0) {
+        return;                                  // a dead read
+    }
+    dt = dt > 0.05f ? 0.05f : dt;
+    bool still_second = rest(acc, gyr, mean);
+
+    if (s.state == 0) {                          // calibrating: wait for a still second
+        cal_total++;
+        for (int i = 0; i < 3; i++) {
+            cal_acc[i] += acc[i];
+            s.up[i] = acc[i] / an;
+        }
+        cal_n++;
+        if (still_second) {
+            start(cal_acc, mean, 1);
+        } else if (cal_total > FUSION_CAL_GIVEUP_S * FUSION_HZ) {
+            start(acc, NULL, 2);                 // never held still: go on, learn the bias at the next rest
+        } else if (run_n == 0) {
+            cal_n = 0;                           // it moved: the next try averages from here
+            memset(cal_acc, 0, sizeof cal_acc);
+        }
+        return;
+    }
+    if (still_second) {                          // resting: follow the gyro's drift (fully, if it was never calibrated)
+        float k = s.state == 2 ? 1.0f : 0.3f;
+        for (int i = 0; i < 3; i++) {
+            s.bias[i] += (mean[i] - s.bias[i]) * k;
+        }
+        s.state = 1;
+    }
+
+    // Turn up by the gyro: a vector fixed in the room moves as v' = v x w in board coordinates.
+    float w[3], d[3];
+    for (int i = 0; i < 3; i++) {
+        w[i] = (gyr[i] - s.bias[i]) * D2R;
+    }
+    cross(s.up, w, d);
+    for (int i = 0; i < 3; i++) {
+        s.up[i] += d[i] * dt;
+    }
+    // Pull towards the accelerometer, less the harder it is being shaken.
+    float trust = clampf(1 - fabsf(an - 1) / TRUST_G, 0, 1), k = KP * trust * dt;
+    for (int i = 0; i < 3; i++) {
+        s.up[i] += (acc[i] / an - s.up[i]) * k;
+    }
+    norm(s.up);
+
+    s.yaw_rate = s.still ? 0 : dot(w, s.up) / D2R;   // resting: no creep
+    s.heading = fmodf(s.heading + s.yaw_rate * dt + 360.0f, 360.0f);
+    s.tilt = clampf(dot(s.up, axes[axis]) - dot(u0, axes[axis]), -1, 1);
+    s.side = clampf(dot(s.up, across), -1, 1);
+    for (int i = 0; i < 3; i++) {
+        s.lin[i] = acc[i] - s.up[i];
+    }
+    s.lin_along = dot(s.lin, axes[axis]);
+    float l = len(s.lin), wd = len(w) / D2R;
+    if (l > KICK_G && kick_armed) {
+        s.kicks++;
+        kick_armed = false;
+    } else if (l < KICK_REARM_G) {
+        kick_armed = true;
+    }
+    // Energy: a fast attack (20 ms) so a flick shows at once, a 300 ms release so it doesn't flicker.
+    float e = fmaxf(0, l - 0.03f) * 1.5f + fmaxf(0, wd - 5) / 300;
+    float tau = e > s.energy ? 0.02f : 0.3f;
+    s.energy += (e - s.energy) * (dt / (tau + dt));
+}
+
+void fusion_get(motion_snap_t *o)
+{
+    *o = s;
+}
