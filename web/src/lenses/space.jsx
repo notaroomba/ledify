@@ -2,6 +2,7 @@
 import { For, Show, createEffect } from 'solid-js';
 import { state, send, toast } from '../store';
 import { Chips, Group } from '../ui';
+import { Brightness } from '../brightness';
 
 const SRC = ['solid', 'rainbow', 'palette', 'temp', 'meter', 'spectrum'];
 export function ZonesLens() {
@@ -17,6 +18,7 @@ export function ZonesLens() {
   const num = (s, key, e) => { const v = Math.max(0, Math.min(count(), Math.round(+e.currentTarget.value || 0))); const a = key === 'a' ? v : s.a, b = key === 'b' ? v : s.b; if (a < b) put(s.i, a, b, s.color, s.rgb); else toast('The end must come after the start', 'warn'); };
   return <>
     <p class="lens-tip">A zone gives part of the strip its own colour. Drag a zone's ends on the outer ring; pixels outside every zone keep the main effect.</p>
+    <Brightness />
     <div class="grid gap-2">
       <For each={segs()} fallback={<p class="empty">No zones. The whole strip follows the main effect.</p>}>{s => <div class="zone-row">
         <div class="flex items-center gap-2">

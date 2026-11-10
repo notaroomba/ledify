@@ -144,6 +144,7 @@
   @media (max-height: 560px) and (max-width: 899px) { :root { --sheet-h: 62dvh; --dock-h: 60px; } .dock-btn span { @apply hidden; } .sats, .fx-step { @apply hidden; } }
 
   /* ---------- controls ---------- */
+  .bright-row { @apply mb-3; }
   .lens-tip { @apply mb-3 rounded-2xl border border-accent/20 bg-accent/5 px-3.5 py-2.5 text-[13px] leading-snug text-fg/80; }
   .group { @apply mt-5 first:mt-1; }
   .group-title { @apply mb-2 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[.14em] text-muted; }

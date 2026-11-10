@@ -7,6 +7,7 @@ import { inputs, paint } from '../engine';
 import { EFFECTS } from '../effects';
 import { onTick } from '../ticker';
 import { Range, Slider, Chips, Toggle, Group, confirmDialog } from '../ui';
+import { Brightness } from '../brightness';
 import { hsv, rgbHsv, hexRgb, rgbHex, clamp } from '../color';
 import { MAX_STOPS, parseStops, stopsCss, distinctColours, sortedStops } from '../gradient';
 
@@ -21,6 +22,7 @@ export function ColourLens() {
   const pick = (hex, now) => { act.color(hex, now); if (now) remember(hex); };
   return <>
     <p class="lens-tip">Drag around the ring to pick a hue. Tap the middle to switch the light on or off.</p>
+    <Brightness />
     <Group title="Saturation">
       <Range class="sat" label="Saturation" min={0} max={100} value={() => Math.round(hsvNow()[1] * 100)}
         set={v => { const [h] = hsvNow(); opt.setColor(rgbHex(...hsv(h, v / 100, 1))); }}
@@ -107,7 +109,8 @@ export function GradientLens() {
   const del = async name => { if (await confirmDialog('Delete gradient?', '"' + name + '" will be removed from this browser.', 'Delete')) grad.del(name); };
   const save = () => { grad.save(nameEl.value); nameEl.value = ''; };
   return <>
-    <p class="lens-tip">The ring is the strip: drag the dots around it to move colours, tap the ring to add one. The gap at the top is where the strip starts.</p>
+    <p class="lens-tip">The ring is the strip: drag the dots around it to move colours, tap the ring to add one. The gap at the top is where the strip starts. Brightness here dims the whole strip; for one darker colour, pick a darker shade for its stop.</p>
+    <Brightness />
     <div ref={bar} class="grad-bar" style={{ background: stopsCss(grad.stops()) }} onPointerDown={e => { if (e.target === bar) grad.addAt(pctAt(e)); }}>
       <Index each={grad.stops()}>{(s, i) => <button type="button" class="grad-handle" classList={{ sel: grad.sel() === i }} style={{ left: s().p + '%', background: s().c }} aria-label={'stop ' + (i + 1) + ' at ' + s().p + '%'} onPointerDown={e => drag(i, e)} onFocus={() => grad.setSel(i)} />}</Index>
     </div>

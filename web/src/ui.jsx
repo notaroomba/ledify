@@ -50,3 +50,4 @@ export function Confirm() {
     <div class="mt-4 flex justify-end gap-2"><button type="button" class="btn" onClick={() => done(false)}>Cancel</button><button type="button" class="btn btn-primary" onClick={() => done(true)}>{ask()?.yes}</button></div>
   </dialog>;
 }
+
