@@ -23,6 +23,18 @@ export const [ui, setUi] = createStore({
 export const dev = () => ui.devices[ui.current] || {};
 export const state = () => dev().state || {};
 export const online = () => !!dev().online;
+// What to call a board: the name it was given (its hostname, "name" in its state), or its MQTT id while it still has
+// the factory name. Two boards with the same name get the end of their id added so the picker can tell them apart.
+export const DEFAULT_NAME = 'ledify';
+export function boardLabel(id) {
+  const name = n => ((ui.devices[n] || {}).state || {}).name;
+  const own = name(id);
+  if (!own || own === DEFAULT_NAME) return id;
+  const twin = Object.keys(ui.devices).some(o => o !== id && name(o) === own);
+  return twin ? own + ' (' + id.slice(-6) + ')' : own;
+}
+// A typed name made into a valid hostname: spaces become dashes, anything else not a letter, digit or dash is dropped.
+export const slugName = t => t.trim().replace(/\s+/g, '-').replace(/[^A-Za-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 31);
 export const hooks = { audio: null, demo: null };      // raw PCM chunks go straight to the listen player; demo takes commands
 
 const touched = new Map();

@@ -4,7 +4,7 @@
 import { render, Dynamic } from 'solid-js/web';
 import { For, Show, createSignal, createMemo, onMount, onCleanup } from 'solid-js';
 import './index.css';
-import { ui, dev, state, opt, init, selectDevice, LOCAL, DEMO } from './store';
+import { ui, dev, state, opt, init, selectDevice, boardLabel, LOCAL, DEMO } from './store';
 import { Confirm } from './ui';
 import { Ring } from './ring';
 import { act } from './actions';
@@ -26,7 +26,7 @@ const LENSES = [
   { id: 'zones', name: 'Zones', keys: 'segments split', icon: '<path d="M12 3a9 9 0 0 1 9 9"/><path d="M21 12a9 9 0 0 1-9 9" opacity=".55"/><path d="M12 21a9 9 0 0 1-9-9" opacity=".3"/><path d="M3 12a9 9 0 0 1 9-9" opacity=".8"/>', view: ZonesLens },
   { id: 'time', name: 'Time', keys: 'schedule sleep sunrise alarm timezone', icon: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>', view: TimeLens },
   { id: 'looks', name: 'Looks', keys: 'presets spotify album saved', icon: '<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>', view: LooksLens },
-  { id: 'board', name: 'Board', keys: 'strip pixels sensors firmware power supply voltage setup broker console', icon: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><rect x="9" y="9" width="6" height="6" rx="1"/>', view: BoardLens },
+  { id: 'board', name: 'Board', keys: 'name rename strip pixels sensors firmware power supply voltage setup broker console', icon: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><rect x="9" y="9" width="6" height="6" rx="1"/>', view: BoardLens },
 ];
 const byId = id => LENSES.find(l => l.id === id);
 
@@ -71,7 +71,7 @@ function App() {
   const grabMove = e => { if (sy !== null) sheet.style.transform = `translateY(${Math.max(0, e.clientY - sy)}px)`; };
   const grabUp = e => { if (sy === null) return; const dy = e.clientY - sy; sy = null; sheet.style.transition = ''; sheet.style.transform = ''; if (dy > 70) close(); };
 
-  const ids = createMemo(() => Object.keys(ui.devices).sort());
+  const ids = createMemo(() => Object.keys(ui.devices).sort((a, b) => boardLabel(a).localeCompare(boardLabel(b))));
   const off = () => ui.conn === 'offline';
   const cur = () => byId(lens());
   const s = state;
@@ -101,8 +101,9 @@ function App() {
     <header class="top">
       <span class="brand">LEDIFY</span>
       <Show when={ids().length > 1}>
-        <select class="board-pick" aria-label="Board" value={ui.current} onChange={e => selectDevice(e.currentTarget.value)}><For each={ids()}>{id => <option value={id}>{id}</option>}</For></select>
+        <select class="board-pick" aria-label="Board" value={ui.current} onChange={e => selectDevice(e.currentTarget.value)}><For each={ids()}>{id => <option value={id}>{boardLabel(id)}</option>}</For></select>
       </Show>
+      <Show when={ids().length === 1 && ui.current && boardLabel(ui.current) !== ui.current}><span class="board-name" title={ui.current}>{boardLabel(ui.current)}</span></Show>
       <span class="conn" title={ui.current || ''}><span class={'dot ' + (ui.conn === 'online' ? 'on' : ui.conn === 'connecting' ? '' : 'off')} />{ui.conn}</span>
       <span class="grow" />
       <button type="button" class="search" onClick={() => setCmdOpen(true)} aria-label="Command bar">

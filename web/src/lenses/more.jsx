@@ -1,6 +1,6 @@
 // Looks (saved presets and Spotify's album colours) and Board (sensors, supply, the strip's hardware, firmware).
-import { For, Show, createEffect } from 'solid-js';
-import { ui, dev, state, send, logText, optimistic, opt, LOCAL, DEMO, setUi } from '../store';
+import { For, Show, createEffect, createSignal } from 'solid-js';
+import { ui, dev, state, send, logText, optimistic, opt, LOCAL, DEMO, setUi, slugName, DEFAULT_NAME } from '../store';
 import { Slider, Chips, Switch, Toggle, Group, confirmDialog } from '../ui';
 import { presets } from '../presets';
 import { sp } from '../spotify';
@@ -54,7 +54,15 @@ export function BoardLens() {
   const db = () => { const s = state(), v = ui.live.db ?? s.sound_db; return v === undefined || v === null ? '–' : Math.round(v) + (s.db_peak ? ' · ' + s.db_peak : ''); };
   const cap = () => { const s = state(); return s.level === undefined ? '–' : (s.limit ? s.cap : s.level) + ' / ' + s.level; };
   const fmt = (v, d) => v === undefined || v === null ? '–' : (+v).toFixed(d);
-  let num, sel, tempIn, otaUrl, cmd;
+  let num, sel, tempIn, otaUrl, cmd, nameIn;
+  const [typed, setTyped] = createSignal('');
+  createEffect(() => { const n = state().name; if (nameIn && n !== undefined && document.activeElement !== nameIn) { nameIn.value = n; setTyped(n); } });
+  const rename = () => {
+    const n = slugName(nameIn.value);
+    if (!n) { nameIn.value = state().name || ''; return; }
+    nameIn.value = n; setTyped(n); nameIn.blur();
+    if (n !== state().name) { send('name ' + n); setTimeout(() => send('status'), 400); }
+  };
   createEffect(() => { const v = count(); if (num && v !== undefined && document.activeElement !== num) num.value = v; });
   createEffect(() => { if (sel) sel.value = type() || 'ws2812'; });
   const setExact = () => { const v = Math.max(1, Math.min(1000, +num.value || 1)); num.value = v; setCount(v); send('count ' + v); };
@@ -65,6 +73,10 @@ export function BoardLens() {
   const ota = async () => { if (await confirmDialog('Update the firmware?', 'From ' + otaUrl.value + '. The strip restarts when the download is done, about a minute.', 'Update')) send('ota ' + otaUrl.value); };
   const sendCmd = () => { const c = cmd.value.trim(); if (c) { send(c); cmd.value = ''; } };
   return <>
+    <Group title="Name" aside={ui.current || ''}>
+      <div class="row"><input ref={nameIn} type="text" maxLength={40} class="field grow" placeholder="e.g. desk or shelf" aria-label="Board name" onInput={e => setTyped(e.currentTarget.value)} onKeyDown={e => e.key === 'Enter' && rename()} /><button type="button" class="btn btn-primary btn-sm" disabled={!slugName(typed()) || slugName(typed()) === state().name} onClick={rename}>Rename</button></div>
+      <p class="hint">{slugName(typed()) && slugName(typed()) !== typed().trim() ? 'Will be saved as "' + slugName(typed()) + '": letters, digits and dashes only. ' : ''}Shown in the board picker here and in every browser, and the board answers at {slugName(typed()) || state().name || DEFAULT_NAME}.local on your network.</p>
+    </Group>
     <div class="tiles">
       <div class="tile"><b>{fmt(lux(), 0)}</b><span>lux</span></div>
       <div class="tile"><b>{fmt(temp(), 1)}</b><span>°C board</span></div>
